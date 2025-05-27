@@ -633,7 +633,9 @@ def run(
 
     if data["new_out"]:
         # dir_name = f'results_{settings.date_time_run}_model_{data["model"]}_lat{data["latent_dims"]}_pose{data["pose_dims"]}_lr{data["learning"]}_beta{data["beta"]}_gamma{data["gamma"]}'
-        dir_name = f'results_{settings.date_time_run}_model_{data["model"]}_lat{data["latent_dims"]}_pose{data["pose_dims"]}_dep{data["depth"]}_channels{data["channels"]}_lr{data["learning"]}_beta{data["beta"]}_gamma{data["gamma"]}'
+        # dir_name = f'results_{settings.date_time_run}_model_{data["model"]}_lat{data["latent_dims"]}_pose{data["pose_dims"]}_dep{data["depth"]}_channels{data["channels"]}_lr{data["learning"]}_beta{data["beta"]}_gamma{data["gamma"]}'
+        slurm_job_id = os.environ.get("SLURM_JOB_ID", "noid")  # Get SLURM job ID or use a default value
+        dir_name = f'results_{slurm_job_id}_{settings.date_time_run}_lat{data["latent_dims"]}_dep{data["depth"]}_ch{data["channels"]}_b{data["beta"]}_g{data["gamma"]}'
         if not os.path.exists(dir_name):
             os.mkdir(dir_name)
         os.chdir(dir_name)
