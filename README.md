@@ -117,7 +117,7 @@ Options:
   -ep, --epochs INTEGER           Number of epochs (default 100).
   -ba, --batch INTEGER            Batch size (default 128).
   -de, --depth INTEGER            Depth of the convolutional layers (default
-                                  3).
+                                  3). # depth/n of fully connected layers when using encoderC
   -ch, --channels INTEGER         First layer channels (default 64).
   -ld, --latent_dims INTEGER      Latent space dimension (default 10).
   -pd, --pose_dims INTEGER        If pose on, number of pose dimensions. If 0
