@@ -395,7 +395,7 @@ class EncoderC(AbstractEncoder):
                     out_features=n_hidden[d]
                 )
             )
-            self.encoder.append(torch.nn.ReLU(True))
+            self.encoder.append(torch.nn.ReLU(True))  # ToDo: allow for different activation functions -mtn
             input_features = n_hidden[d]  # update the number of nodes in the hidden layer to input to the next layer
 
         self.mu = torch.nn.Linear(in_features=n_hidden[-1], out_features=latent_dims)  # reduce the dimensionality to the required number of latent dims
