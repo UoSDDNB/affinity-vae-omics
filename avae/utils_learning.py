@@ -209,14 +209,21 @@ def add_meta(
 
     meta["mode"] = mode
     # meta["image"] += format(x_hat, data_dim) # commented out at this requires image input
+
+    # Collect new columns for latent_mu, latent_logvar, and lat_pose
+    new_cols = {}
     for d in range(latent_mu.shape[-1]):
-        meta[f"lat{d}"] = np.array(latent_mu[:, d].cpu().detach().numpy())
+        new_cols[f"lat{d}"] = np.array(latent_mu[:, d].cpu().detach().numpy())
     for d in range(latent_logvar.shape[-1]):
         lat_std = np.exp(0.5 * latent_logvar[:, d].cpu().detach().numpy())
-        meta[f"std-{d}"] = np.array(lat_std)
+        new_cols[f"std-{d}"] = np.array(lat_std)
     if lat_pose is not None:
         for d in range(lat_pose.shape[-1]):
-            meta[f"pos{d}"] = np.array(lat_pose[:, d].cpu().detach().numpy())
+            new_cols[f"pos{d}"] = np.array(lat_pose[:, d].cpu().detach().numpy())
+
+    # Concatenate all new columns at once to avoid fragmentation
+    meta = pd.concat([meta, pd.DataFrame(new_cols, index=meta.index)], axis=1)
+
     meta_df = pd.concat(
         [meta_df, meta], ignore_index=False
     )  # ignore index doesn't overwrite
