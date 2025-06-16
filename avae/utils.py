@@ -2,7 +2,7 @@ import copy
 import logging
 import os.path
 import typing
-
+import distinctipy
 import matplotlib.pyplot as plt
 import mrcfile
 import numpy as np
@@ -14,6 +14,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
+
 
 
 def accuracy(
@@ -223,15 +224,8 @@ def save_mrc_file(fname: str, array: npt.NDArray) -> None:
 
 
 def colour_per_class(classes: list) -> list:
-    num_colors = len(classes)
-    if num_colors <= 20:
-        # Use tab20 for up to 20 classes for maximum distinction
-        cmap = plt.get_cmap('tab20')
-        colours = [cmap(i) for i in range(num_colors)]
-    else:
-        # Fall back to hsv for more than 20 classes
-        cmap = plt.get_cmap('hsv')
-        colours = [cmap(i / num_colors) for i in range(num_colors)]
+    num_classes = len(classes)
+    colours = distinctipy.get_colors(num_classes)
     return colours
 
 
