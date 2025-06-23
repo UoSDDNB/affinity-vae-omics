@@ -16,3 +16,4 @@ torchvision
 umap-learn
 anndata
 scanpy
+distinctipy

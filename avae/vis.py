@@ -249,15 +249,23 @@ def latent_embed_plot_tsne(
             plt.scatter(
                 lats[idx, 0],
                 lats[idx, 1],
-                s=24,
+                s=12,
                 # label=mol[:4], # don't want to cut off the legend labels at 4 characters
                 label=mol,
                 facecolor=color,
                 edgecolor=color,
-                alpha=0.2,
+                alpha=0.7,  # increased alpha for smaller datasets
             )
 
-        ax.legend(bbox_to_anchor=(0.5, -0.1), loc="upper center", ncol = 5, fontsize=10) # changed from upper left, and repositioned
+        # Move legend to the side and list categories vertically
+        ax.legend(
+            bbox_to_anchor=(1.05, 1),
+            loc="upper left",
+            ncol=1,
+            fontsize=10,
+            borderaxespad=0.0,
+            title="cell_type"
+        )
         plt.xlabel("TSNE-1")
         plt.ylabel("TSNE-2")
 
@@ -380,15 +388,23 @@ def latent_embed_plot_umap(
             ax.scatter(
                 embedding[idx, 0],
                 embedding[idx, 1],
-                s=24,
+                s=12, 
                 label=mol,
                 # label=mol[:4],
                 facecolor=color,
                 edgecolor=color,
-                alpha=0.2,
+                alpha=0.7, # increased alpha for smaller datasets
             )
 
-        ax.legend(bbox_to_anchor = (0.5, -0.1), loc = "upper center", ncol = 6, fontsize = 10) # changed position and font size
+        # Move legend to the side and list cell_type vertically
+        ax.legend(
+            bbox_to_anchor=(1.05, 1),
+            loc="upper left",
+            ncol=1,
+            fontsize=10,
+            borderaxespad=0.0,
+            title="cell_type"
+        )
         plt.xlabel("UMAP-1")
         plt.ylabel("UMAP-2")
 

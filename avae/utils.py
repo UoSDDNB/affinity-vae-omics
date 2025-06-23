@@ -2,7 +2,7 @@ import copy
 import logging
 import os.path
 import typing
-
+import distinctipy
 import matplotlib.pyplot as plt
 import mrcfile
 import numpy as np
@@ -14,6 +14,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
+
 
 
 def accuracy(
@@ -223,32 +224,8 @@ def save_mrc_file(fname: str, array: npt.NDArray) -> None:
 
 
 def colour_per_class(classes: list) -> list:
-    # Define the number of colors you want
-    num_colors = len(classes)
-
-    # Choose colormaps for combining [ECP 3.06.24 - swapped tab20 for accent, as tab20 colours are in similar pairs]
-    # cmap_1 = plt.get_cmap("tab20")
-    # cmap_2 = plt.get_cmap("Accent")
-    # cmap_3 = plt.get_cmap("Pastel1")
-    # cmap_4 = plt.get_cmap("Set1")
-    cmap_1 = plt.get_cmap("Set1")
-    cmap_2 = plt.get_cmap("tab20")
-    cmap_3 = plt.get_cmap("Accent")
-    cmap_4 = plt.get_cmap("Pastel1")
-
-    # Combine the four colormaps
-    combined_cmap = [cmap_1(i % 20) for i in range(20)]
-    combined_cmap.extend([cmap_2(i % 8) for i in range(8)])
-    combined_cmap.extend([cmap_3(i % 8) for i in range(8)])
-    combined_cmap.extend([cmap_4(i % 8) for i in range(8)])
-
-    # Create the colormap object
-    custom_cmap = plt.cm.colors.ListedColormap(
-        combined_cmap, name="custom_cmap"
-    )
-
-    # Generate a list of colors based on the modulo operation of i with respect to the number of colors in the combined colormap
-    colours = [custom_cmap(i % len(combined_cmap)) for i in range(num_colors)]
+    num_classes = len(classes)
+    colours = distinctipy.get_colors(num_classes)
     return colours
 
 
