@@ -14,8 +14,8 @@ from .utils_learning import add_meta, pass_batch, set_device
 def evaluate(
     datapath: str,
     datatype: str,
-    state: str | None,
-    meta: str | None,
+    state: str,  # Removed the default value "None" (state should be provided, states dir can be extracted from state path) 17.09.25 MTN
+    meta: str,  # Removed the default value "None" (meta should be provided) 17.09.25 MTN
     lim: int | None,
     splt: int,
     batch_s: int,
@@ -63,6 +63,16 @@ def evaluate(
 
 
     """
+
+    # Ensure the meta file is a .pkl file
+    if not meta.endswith(".pkl"):
+        raise ValueError(f"The meta file must be a .pkl file. Provided: {meta}")
+
+    # Ensure the state file is a .pt file
+    if not state.endswith(".pt"):
+        raise ValueError(f"The state file must be a .pt file. Provided: {state}")
+
+
     # ############################### DATA ###############################
     tests, data_dim = load_data(
         datapath=datapath,
@@ -80,17 +90,19 @@ def evaluate(
     # ############################### MODEL ###############################
     device = set_device(use_gpu)
 
-    if state is None:
-        if not os.path.exists("states"):
-            raise RuntimeError(
-                "There are no existing model states saved or provided via the state flag in config unable to evaluate."
-            )
-        else:
-            state = sorted(
-                [s for s in os.listdir("states") if ".pt" in s],
-                key=lambda x: int(x.split("_")[2][1:]),
-            )[-1]
-            state = os.path.join("states", state)
+    # 17.09.25 MTN
+    # Commented out block below as state should be provided as an input to the function 
+    # if state is None:
+    #     if not os.path.exists("states"):
+    #         raise RuntimeError(
+    #             "There are no existing model states saved or provided via the state flag in config unable to evaluate."
+    #         )
+    #     else:
+    #         state = sorted(
+    #             [s for s in os.listdir("states") if ".pt" in s],
+    #             key=lambda x: int(x.split("_")[2][1:]),
+    #         )[-1]
+    #         state = os.path.join("states", state)
 
     s = os.path.basename(state)
     fname = s.split(".")[0].split("_")
@@ -105,16 +117,18 @@ def evaluate(
 
     # ########################## EVALUATE ################################
 
-    if meta is None:
-        metas = sorted(
-            [
-                f
-                for f in os.listdir("states")
-                if ".pkl" in f and "eval" not in f
-            ],
-            key=lambda x: int(x.split("_")[2][1:]),
-        )[-1]
-        meta = os.path.join("states", metas)
+    # 17.09.25 MTN
+    # Commented out block below as meta should be provided as an input to the function
+    # if meta is None:
+    #     metas = sorted(
+    #         [
+    #             f
+    #             for f in os.listdir("states")
+    #             if ".pkl" in f and "eval" not in f
+    #         ],
+    #         key=lambda x: int(x.split("_")[2][1:]),
+    #     )[-1]
+    #     meta = os.path.join("states", metas)
 
     logging.info("Loading model from: {}".format(meta))
     meta_df = pd.read_pickle(meta)
@@ -255,38 +269,45 @@ def evaluate(
             "_train_eval_comparison",
         )
 
-    # visualise accuracy
-    (train_acc, val_acc, val_acc_selected, ypred_train, ypred_val,) = accuracy(
-        latents_training,
-        np.array(latents_training_id),
-        x_test,
-        np.array(y_test),
-        classifier=classifier,
-    )
-    logging.info(
-        "------------------->>> Accuracy: Train: %f | Val : %f | Val with unseen labels: %f\n"
-        % (train_acc, val_acc_selected, val_acc)
-    )
-    vis.accuracy_plot(
-        np.array(latents_training_id),
-        ypred_train,
-        y_test,
-        ypred_val,
-        classes,
-        mode="_eval",
-    )
-    vis.f1_plot(
-        np.array(latents_training_id),
-        ypred_train,
-        y_test,
-        ypred_val,
-        classes,
-        mode="_eval",
-    )
+
+    if settings.VIS_ACC:  # allow vis_acc to be skipped 17.09.25 MTN
+        # visualise accuracy
+        (train_acc, val_acc, val_acc_selected, ypred_train, ypred_val,) = accuracy(
+            latents_training,
+            np.array(latents_training_id),
+            x_test,
+            np.array(y_test),
+            classifier=classifier,
+        )
+        logging.info(
+            "------------------->>> Accuracy: Train: %f | Val : %f | Val with unseen labels: %f\n"
+            % (train_acc, val_acc_selected, val_acc)
+        )
+        vis.accuracy_plot(
+            np.array(latents_training_id),
+            ypred_train,
+            y_test,
+            ypred_val,
+            classes,
+            mode="_eval",
+        )
+        vis.f1_plot(
+            np.array(latents_training_id),
+            ypred_train,
+            y_test,
+            ypred_val,
+            classes,
+            mode="_eval",
+        )
+    else:
+        logging.info("VIS_ACC is set to False, skipping visualisation of accuracy and F1 score.")
+
+
     logging.info("Saving meta files with evaluation data.")
 
     metas = os.path.basename(meta)
+    states_dir = os.path.dirname(state)
     # save metadata with evaluation data
     meta_df.to_pickle(
-        os.path.join("states", metas.split(".")[0] + "_eval.pkl")
+        os.path.join(states_dir, metas.split(".")[0] + "_eval.pkl") # avoid hard coding "states" directory 17.09.25 MTN
     )
