@@ -227,8 +227,8 @@ def latent_embed_plot_tsne(
     n_classes = len(classes)
 
     if n_classes < 3:
-        # If the number of classes are not moe than 3 the size of the figure would be too
-        # small and matplotlib would through a singularity error
+        # If the number of classes are not more than 3 the size of the figure would be too
+        # small and matplotlib would throw a singularity error
         fig, ax = plt.subplots(
             figsize=(int(n_classes / 2) + 7, int(n_classes / 2) + 5)
         )
@@ -236,7 +236,7 @@ def latent_embed_plot_tsne(
         fig, ax = plt.subplots(
             figsize=(int(n_classes / 2) + 4, int(n_classes / 2) + 2)
         )
-    # When the number of classes is less than 3 the image becomes two small
+    # When the number of classes is less than 3 the image becomes too small
     colours = colour_per_class(classes)
 
     if xs.shape[-1] != 1:
