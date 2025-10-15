@@ -221,6 +221,12 @@ def add_meta(
         for d in range(lat_pose.shape[-1]):
             new_cols[f"pos{d}"] = np.array(lat_pose[:, d].cpu().detach().numpy())
 
+    # Calculate KL divergence per sample
+    kl_divergence = -0.5 * (
+        1 + latent_logvar.cpu().detach().numpy() - latent_mu.cpu().detach().numpy()**2 - np.exp(latent_logvar.cpu().detach().numpy())
+    )
+    new_cols["kl_sample"] = np.sum(kl_divergence, axis=1)
+
     # Concatenate all new columns at once to avoid fragmentation
     meta = pd.concat([meta, pd.DataFrame(new_cols, index=meta.index)], axis=1)
 
