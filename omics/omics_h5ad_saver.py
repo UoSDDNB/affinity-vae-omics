@@ -4,6 +4,7 @@ import anndata
 import scanpy
 import os
 import numpy
+import scipy.sparse as sp
 
 # Script to split an .h5ad file into a set of 1D numpy arrays,
 # append class (cell_type) label and save as individual files.
@@ -47,18 +48,20 @@ def matrix_split_save(sc_matrix, cell_types, output_path):
     # Create a list to store individual arrays
     cell_array_lst = list(range(sc_matrix.shape[0]))
 
-    # Split the matrix into individual arrays
-    for idx in range(sc_matrix.shape[0]):
-        cell_array_lst[idx] = sc_matrix[idx, :].A.reshape(-1,)  # added reshape to make sure that my arrays are 1D
-        # print a message to indicate progress at 25% intervals
-        if idx % (sc_matrix.shape[0] // 4) == 0:
-            print(f"Cells processed: {idx}/{sc_matrix.shape[0]}")
 
-    # cell_array_lst = sc_matrix.A.tolist()  # Optimized version of above, encounters issues with lack of memory.
+    # # Split the matrix into individual arrays
+    # for idx in range(sc_matrix.shape[0]):
+    #     cell_array_lst[idx] = sc_matrix[idx, :].reshape(-1,)  # added reshape to make sure that my arrays are 1D
+    #     # print a message to indicate progress at 25% intervals
+    #     if idx % (sc_matrix.shape[0] // 4) == 0:
+    #         print(f"Cells processed: {idx}/{sc_matrix.shape[0]}")
+
+    cell_array_lst = sc_matrix.tolist()  # Optimized version of above, encounters issues with lack of memory.
+    
 
     # Make sure that the user has a directory named input_arrays.
     # if not, create it.
-    input_arrays_path = os.path.join(output_path, 'input_arrays')
+    input_arrays_path = os.path.join(output_path, f'input_arrays{suffix}')
     if os.path.exists(input_arrays_path):
         print(f"Warning '{input_arrays_path}' directory already exists")
         input_arrays_warning_printed = True
@@ -76,7 +79,7 @@ def matrix_split_save(sc_matrix, cell_types, output_path):
         # print(sample.shape)
 
         # Build save path
-        save_path = os.path.join(output_path, 'input_arrays', sample_name)
+        save_path = os.path.join(output_path, f'input_arrays{suffix}', sample_name)
 
         # save the sample arrays
         numpy.save(save_path, sample)
@@ -132,8 +135,26 @@ if __name__ == '__main__':
              "Default is '0' (all genes)"
     )
 
+    # Argument for excluding specific cell types
+    # these changes have a bug in generation of class_lst.csv (missing/too many classes)
+    parser.add_argument(
+        "--exclude_celltypes",
+        default="",
+        help="Comma-separated list of cell types to exclude (e.g. T,B)"
+    )
+
+    # Argument for including only specific cell types
+    parser.add_argument(
+        "--include_only_celltypes",
+        default="",
+        help="Comma-separated list of cell types to include only (e.g. T,B)"
+    )
+
     # Parsing the command-line arguments
     args = parser.parse_args()
+
+    print("Parsing command-line arguments...")
+
 
     # Assigning values from parsed arguments to variables
     h5ad_file = args.h5ad_file
@@ -141,26 +162,61 @@ if __name__ == '__main__':
     cell_type_column_name = args.cell_type_column_name
     ngenes = int(args.ngenes)
 
+    # Parse exclude/include celltypes
+    exclude_celltypes = [x for x in args.exclude_celltypes.split(",") if x]
+    include_only_celltypes = [x for x in args.include_only_celltypes.split(",") if x]
+
+    print(f"Reading .h5ad file from: {h5ad_file}")
+
     # read in the .h5ad file
     adata = anndata.read_h5ad(h5ad_file)
-    print(r"read in the .h5ad file")
+    print(r"Read in the .h5ad file")
+
+    # make a table of counts of each cell type in the data
+    print(f"Cells per cell_type: \n \n {adata.obs[cell_type_column_name].value_counts()}")
+
+    # Filter by include_only_celltypes or exclude_celltypes
+    suffix = ""
+    if include_only_celltypes:
+        print(f"Including only cell types: {include_only_celltypes}")
+        adata = adata[adata.obs[cell_type_column_name].isin(include_only_celltypes)].copy()
+        suffix = "_ONLY_" + "_".join(include_only_celltypes)
+        suffix = suffix.replace(" ", "-")
+    elif exclude_celltypes:
+        print(f"Excluding cell types: {exclude_celltypes}")
+        adata = adata[~adata.obs[cell_type_column_name].isin(exclude_celltypes)].copy()
+        suffix = "_MASKED_" + "_".join(exclude_celltypes)
+        suffix = suffix.replace(" ", "-")
+    # else: output_path remains as given
+
+    # make a table of counts of each cell type in the data
+    print(f"Cells per cell_type post cell_type filter: \n \n {adata.obs[cell_type_column_name].value_counts()}")
+    
+
 
     # If --ngenes is > 0, subset the data to the top ngenes
     if ngenes > 0:
         print(f"Subsetting the data to the top {ngenes} most variable genes")
-        #identify the most variable genes
-        scanpy.pp.highly_variable_genes(adata, n_top_genes = ngenes)
-
-        # downsample to only inlude the most variable genes
+        # identify the most variable genes
+        scanpy.pp.highly_variable_genes(adata, n_top_genes=ngenes, flavor='cell_ranger')
+        # this could be skipped by using subset = True above
+        # downsample to only include the most variable genes
         adata = adata[:, adata.var.highly_variable]
         print(f"Subsetted the data to the top {ngenes} highly variable genes")
+    else:
+        print("Using all genes (no subsetting).")
     
 
     # Extract the counts matrix
     sc_matrix = adata.X
     print(r"Extracted the counts matrix")
+    # convert to numpy array if it's a sparse matrix
+    if sp.issparse(sc_matrix):
+        sc_matrix = sc_matrix.toarray()
+
 
     # Extract the cell_type column from the metadata
+    print(f"Extracting cell type column '{cell_type_column_name}' from metadata...")
     cell_types = adata.obs[cell_type_column_name]
     # Modify cell_types to remove commas
     cell_types = cell_types.str.replace(', ', '--') # avoided _ as they're buggy
@@ -168,25 +224,32 @@ if __name__ == '__main__':
     cell_types = cell_types.str.replace(' ', '-')
 
     # Identify the unique classes
+    print("Identifying unique classes...")
     cell_types_unique = numpy.unique(cell_types).reshape(1, -1)
     print(r"Unique classes:" + str(cell_types_unique))
 
     # Check if the class_lst.csv file already exists
-    if os.path.exists(os.path.join(output_path, 'class_lst.csv')):
-        print(f"Warning: '{output_path}\\class_lst.csv' already exists.")
+    class_lst_filename = f"class_lst{suffix}.csv" if suffix else "class_lst.csv"
+    class_lst_path = os.path.join(os.path.dirname(output_path), class_lst_filename)
+    print("Checking for existing class_lst.csv file...")
+    if os.path.exists(class_lst_path):
+        print(f"Warning: '{class_lst_path}' already exists.")
         class_warning_printed = True
     else:
         class_warning_printed = False
 
     # save the unique list of classes as a csv file
-    numpy.savetxt(os.path.join(output_path, 'class_lst.csv'), 
+    print("Saving unique class list to CSV...")
+    numpy.savetxt(class_lst_path, 
                   cell_types_unique, 
                   fmt='%s',  
                   delimiter=",")
     if class_warning_printed:
-        print(f"Warning: '{output_path}\\class_lst.csv' was overwritten.")
+        print(f"Warning: '{class_lst_path}' was overwritten.")
     else:
-        print(f"Unique classes saved to {output_path}\\class_lst.csv")
+        print(f"Unique classes saved to {class_lst_path}")
 
     # split matrix and save as individual files
+    print("Splitting matrix and saving as individual files...")
     matrix_split_save(sc_matrix, cell_types, output_path)
+    print("Done.")
