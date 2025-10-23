@@ -711,6 +711,7 @@ def run_pipeline(data):
             rescale=data["rescale"],
             tensorboard=data["tensorboard"],
             classifier=data["classifier"],
+            color_lookup=data["color_lookup"],
         )
     else:
         evaluate(
@@ -729,6 +730,7 @@ def run_pipeline(data):
             rescale=data["rescale"],
             classifier=data["classifier"],
             pose_dims=data["pose_dims"],       # ECP - added 3.06.24. Missing so can't turn off pose in evaluation
+            color_lookup=data["color_lookup"],
         )
 
 

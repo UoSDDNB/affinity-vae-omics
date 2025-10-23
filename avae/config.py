@@ -147,6 +147,8 @@ class AffinityConfig(BaseModel):
         False, description="Use batch normalisation in decoder"
     )
     klreduction: str = Field('mean', description="KL reduction method")
+    color_lookup: dict | None = Field(
+        None, description="Dictionary mapping class names to RGB colors")
 
 
 def load_config_params(

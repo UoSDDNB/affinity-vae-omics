@@ -27,6 +27,7 @@ def evaluate(
     rescale: bool,
     classifier: str,
     pose_dims: int,      # This is a quick fix. previously the pose_dims was taken from elsewhere in the model (see line 98)
+    color_lookup: dict | None,
 ):
     """Function for evaluating the model. Loads the data, model and runs the evaluation. Saves the results of the
     evaluation in the plot and latents directories.
@@ -60,7 +61,10 @@ def evaluate(
         If True, the input data is shifted to have a minimum value of 0 and max 1.
     classifier: str
         The method to use on the latent space classification. Can be neural network (NN), k nearest neighbourgs (KNN) or logistic regression (LR).
-
+    pose_dims: int
+        Number of pose dimensions.
+    color_lookup: dict 
+        Dictionary for mapping class names to colors for visualisations.
 
     """
 
@@ -230,10 +234,18 @@ def evaluate(
     # visualise embeddings
     if settings.VIS_EMB:
         vis.latent_embed_plot_umap(
-            x_test, np.array(y_test), classes_list, "_eval"
+            x_test,
+            np.array(y_test),
+            classes_list,
+            color_lookup=color_lookup,
+            mode="_eval"
         )
         vis.latent_embed_plot_tsne(
-            x_test, np.array(y_test), classes_list, "_eval"
+            x_test,
+            np.array(y_test),
+            classes_list,
+            color_lookup=color_lookup,
+            mode="_eval"
         )
 
     if settings.VIS_SIM:
@@ -260,13 +272,15 @@ def evaluate(
             np.concatenate([x_test, latents_training]),
             np.concatenate([np.array(y_test), np.array(latents_training_id)]),
             classes_list,
-            "_train_eval_comparison",
+            color_lookup=color_lookup,
+            mode="_train_eval_comparison",
         )
         vis.latent_embed_plot_tsne(
             np.concatenate([x_test, latents_training]),
             np.concatenate([np.array(y_test), np.array(latents_training_id)]),
             classes_list,
-            "_train_eval_comparison",
+            color_lookup=color_lookup,
+            mode="_train_eval_comparison",
         )
 
 

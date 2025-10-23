@@ -85,3 +85,12 @@ freq_all: 10  # sets all above to the same value (inc freq_sta and freq_eval)
 
 #### debug parameters
 debug: false
+
+# define a color mapping for consistent colors throughout visualizations
+#### Visualization color parameters
+color_lookup:
+  class1: [1.0, 0.0, 0.0]     # Red (RGB values 0-1)
+  class2: [0.0, 1.0, 0.0]     # Green
+  class3: [0.0, 0.0, 1.0]     # Blue
+  # Add more class-color mappings as needed
+  # Classes not listed here will use auto-generated colors

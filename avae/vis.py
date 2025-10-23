@@ -159,6 +159,7 @@ def latent_embed_plot_tsne(
     xs: npt.NDArray,
     ys: npt.NDArray,
     classes: list | None = None,
+    color_lookup: dict | None = None,
     mode: str = "",
     epoch: int = 0,
     writer: typing.Any = None,
@@ -237,7 +238,7 @@ def latent_embed_plot_tsne(
             figsize=(int(n_classes / 2) + 4, int(n_classes / 2) + 2)
         )
     # When the number of classes is less than 3 the image becomes too small
-    colours = colour_per_class(classes)
+    colours = colour_per_class(classes, color_lookup)
 
     if xs.shape[-1] != 1:
 
@@ -306,6 +307,7 @@ def latent_embed_plot_umap(
     xs: npt.NDArray,
     ys: npt.NDArray,
     classes: list | None = None,
+    color_lookup: dict | None = None,
     mode: str = "",
     epoch: int = 0,
     writer: typing.Any = None,
@@ -377,7 +379,7 @@ def latent_embed_plot_umap(
             figsize=(int(n_classes / 2) + 4, int(n_classes / 2) + 2)
         )
 
-    colours = colour_per_class(classes)
+    colours = colour_per_class(classes, color_lookup)
 
     if xs.shape[-1] != 1:
 

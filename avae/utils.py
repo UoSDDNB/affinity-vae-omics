@@ -223,9 +223,50 @@ def save_mrc_file(fname: str, array: npt.NDArray) -> None:
         mrc.set_data(array)
 
 
-def colour_per_class(classes: list) -> list:
-    num_classes = len(classes)
-    colours = distinctipy.get_colors(num_classes)
+# def colour_per_class(classes: list) -> list:
+#     num_classes = len(classes)
+#     colours = distinctipy.get_colors(num_classes)
+#     return colours
+
+def colour_per_class(classes: list, color_lookup: dict | None = None) -> list:
+    """
+    Generate colors for classes using custom lookup or auto-generation.
+    
+    Parameters
+    ----------
+    classes : list
+        List of class names
+    color_lookup : dict | None
+        Optional dictionary mapping class names to RGB tuples (values 0-1)
+        
+    Returns
+    -------
+    list
+        List of color tuples corresponding to classes
+    """
+    colours = []
+    
+    # Use color lookup if provided, otherwise empty dict
+    if color_lookup is None:
+        color_lookup = {}
+    
+    # Identify classes that need auto-generated colors
+    missing_classes = [c for c in classes if c not in color_lookup]
+    
+    # Generate colors for missing classes
+    if missing_classes:
+        auto_colors = distinctipy.get_colors(len(missing_classes))
+        auto_color_map = dict(zip(missing_classes, auto_colors))
+    else:
+        auto_color_map = {}
+    
+    # Assign colors in order of classes list
+    for class_name in classes:
+        if class_name in color_lookup:
+            colours.append(tuple(color_lookup[class_name]))
+        else:
+            colours.append(auto_color_map[class_name])
+    
     return colours
 
 

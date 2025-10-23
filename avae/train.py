@@ -62,6 +62,7 @@ def train(
     rescale: bool,
     tensorboard: bool,
     classifier: str,
+    color_lookup: dict | None,
 ):
     """Function to train an AffinityVAE model. The inputs are training configuration parameters. In this function the
     data is loaded, selected and split into training, validation and test sets, the model is initialised and trained
@@ -141,6 +142,8 @@ def train(
         If True, batch normalisation is applied to the encoder.
     bnrom_decoder: bool
         If True, batch normalisation is applied to the decoder.
+    color_lookup: dict
+        A dictionary mapping class labels to colors for visualizations.
     """
     torch.manual_seed(42)
 
@@ -611,16 +614,17 @@ def train(
                 if pose:
                     ps = np.r_[p_train, p_val]
 
-            vis.latent_embed_plot_tsne(xs, ys, classes_list, epoch=epoch, writer=writer) # added classes_list MTN 29.09.25
+            vis.latent_embed_plot_tsne(
+                xs, ys, classes_list, epoch=epoch, writer=writer, color_lookup=color_lookup) # added classes_list MTN 29.09.25
             vis.latent_embed_plot_umap(
-                xs, ys, classes_list, epoch=epoch, writer=writer
+                xs, ys, classes_list, epoch=epoch, writer=writer, color_lookup=color_lookup
             )
             if pose:
                 vis.latent_embed_plot_tsne(
-                    ps, ys, classes_list, epoch=epoch, writer=writer, mode="pose"
+                    ps, ys, classes_list, epoch=epoch, writer=writer, mode="pose", color_lookup=color_lookup
                 ) # added classes_list MTN 29.09.25
                 vis.latent_embed_plot_umap(
-                    ps, ys, classes_list, epoch=epoch, writer=writer, mode="pose"
+                    ps, ys, classes_list, epoch=epoch, writer=writer, mode="pose", color_lookup=color_lookup
                 ) # added classes_list MTN 29.09.25
 
             if settings.VIS_DYN:
