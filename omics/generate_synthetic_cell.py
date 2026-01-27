@@ -265,6 +265,10 @@ def build_synthetic_metadata_entry(
     latent_values: np.ndarray,
     stds: np.ndarray,
     kl_value: float,
+    *,
+    origin: str = "synthetic",
+    source_cell_idx: Optional[int] = None,
+    extra_metadata: Optional[dict] = None,
 ) -> tuple[str, dict]:
     """
     Prepare a metadata row for a synthetic cell.
@@ -285,9 +289,13 @@ def build_synthetic_metadata_entry(
         entry[col] = stds[idx]
 
     entry["kl_divergence"] = kl_value
-    entry["source_cell_idx"] = cell_idx
-    entry["origin"] = "synthetic"
+    entry["source_cell_idx"] = (
+        source_cell_idx if source_cell_idx is not None else cell_idx
+    )
+    entry["origin"] = origin
     entry["synthetic_id"] = synthetic_id
+    if extra_metadata:
+        entry.update(extra_metadata)
 
     return synthetic_id, entry
 
@@ -296,7 +304,12 @@ def plot_latent_umap_from_metadata(
     meta_df: pd.DataFrame, highlighted_ids: Sequence[str], output_dir: str
 ) -> Optional[str]:
     """
-    Generate a UMAP projection from latent metadata and save plot.
+    Generate latent-space projections (UMAP + PCA) from latent metadata and save plots.
+    Produces:
+      - UMAP colored by origin
+      - UMAP colored by cell type (if available)
+      - PCA colored by origin
+      - PCA colored by cell type (if available)
     """
     lat_cols = _get_latent_columns(meta_df)
     if not lat_cols:
@@ -304,59 +317,131 @@ def plot_latent_umap_from_metadata(
         return None
 
     latent_matrix = meta_df[lat_cols].to_numpy()
+
+    # UMAP embedding of the latent space
     if latent_matrix.shape[1] > 2:
         reducer = umap.UMAP(random_state=42)
-        embedding = reducer.fit_transform(latent_matrix)
+        umap_embedding = reducer.fit_transform(latent_matrix)
     else:
-        embedding = latent_matrix
+        umap_embedding = latent_matrix
+
+    # PCA embedding of the latent space (first two principal components)
+    latent_centered = latent_matrix - latent_matrix.mean(axis=0, keepdims=True)
+    if latent_centered.shape[1] > 1:
+        # Use SVD to avoid depending on external PCA implementations
+        _, _, vt = np.linalg.svd(latent_centered, full_matrices=False)
+        pca_embedding = latent_centered @ vt[:2].T
+    else:
+        pca_embedding = latent_centered
 
     origin_series = (
-        meta_df["origin"].fillna("real") if "origin" in meta_df.columns else pd.Series(
-            ["real"] * len(meta_df), index=meta_df.index
-        )
+        meta_df["origin"].fillna("real")
+        if "origin" in meta_df.columns
+        else pd.Series(["real"] * len(meta_df), index=meta_df.index)
     )
-    unique_origins = sorted(origin_series.unique())
-    cmap = plt.get_cmap("tab10")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for idx, label in enumerate(unique_origins):
-        mask = origin_series == label
-        color = cmap(idx % 10)
-        ax.scatter(
-            embedding[mask, 0],
-            embedding[mask, 1],
-            s=15,
-            alpha=0.6,
-            label=label,
-            facecolor=color,
-            edgecolor="none",
-        )
-
-    if highlighted_ids:
-        highlight_mask = meta_df.index.isin(highlighted_ids)
-        ax.scatter(
-            embedding[highlight_mask, 0],
-            embedding[highlight_mask, 1],
-            s=40,
-            facecolors="none",
-            edgecolors="black",
-            linewidths=0.8,
-            label="synthetic_cells",
-        )
-
-    ax.set_xlabel("UMAP-1" if embedding.shape[1] > 1 else "Latent-1")
-    ax.set_ylabel("UMAP-2" if embedding.shape[1] > 1 else "Latent-2")
-    ax.set_title("Latent space UMAP (real + synthetic)")
-    ax.legend(loc="best", fontsize=8)
-    plt.tight_layout()
+    # Use the `id` column for coloring if it exists
+    id_series: Optional[pd.Series] = None
+    if "id" in meta_df.columns:
+        id_series = meta_df["id"]
 
     os.makedirs(output_dir, exist_ok=True)
-    plot_path = os.path.join(output_dir, "latent_umap.png")
-    plt.savefig(plot_path, dpi=300)
-    plt.close(fig)
+    cmap = plt.get_cmap("tab10")
 
-    print(f"Saved latent UMAP plot to: {plot_path}")
-    return plot_path
+    def _plot_by_series(
+        series: pd.Series,
+        embedding: np.ndarray,
+        title_prefix: str,
+        filename: str,
+        x_label: str,
+        y_label: str,
+    ) -> str:
+        unique_vals = sorted(series.dropna().unique())
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for idx, label in enumerate(unique_vals):
+            mask = series == label
+            color = cmap(idx % 10)
+            ax.scatter(
+                embedding[mask, 0],
+                embedding[mask, 1],
+                s=15,
+                alpha=0.6,
+                label=label,
+                facecolor=color,
+                edgecolor="none",
+            )
+
+        if highlighted_ids:
+            highlight_mask = meta_df.index.isin(highlighted_ids)
+            ax.scatter(
+                embedding[highlight_mask, 0],
+                embedding[highlight_mask, 1],
+                s=40,
+                facecolors="none",
+                edgecolors="black",
+                linewidths=0.8,
+                label="synthetic_cells",
+            )
+
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(title_prefix)
+        ax.legend(loc="best", fontsize=8)
+        plt.tight_layout()
+
+        plot_path = os.path.join(output_dir, filename)
+        plt.savefig(plot_path, dpi=300)
+        plt.close(fig)
+        return plot_path
+
+    # UMAP: primary latent-space plot colored by origin
+    origin_umap_path = _plot_by_series(
+        origin_series,
+        umap_embedding,
+        "Latent space UMAP by origin (real + synthetic)",
+        "latent_umap_by_origin.png",
+        x_label="UMAP-1" if umap_embedding.shape[1] > 1 else "Latent-1",
+        y_label="UMAP-2" if umap_embedding.shape[1] > 1 else "Latent-2",
+    )
+    print(f"Saved latent UMAP (by origin) to: {origin_umap_path}")
+
+    # UMAP: latent-space plot colored by `id`, if available
+    if id_series is not None:
+        id_umap_path = _plot_by_series(
+            id_series,
+            umap_embedding,
+            "Latent space UMAP by id (real + synthetic)",
+            "latent_umap_by_id.png",
+            x_label="UMAP-1" if umap_embedding.shape[1] > 1 else "Latent-1",
+            y_label="UMAP-2" if umap_embedding.shape[1] > 1 else "Latent-2",
+        )
+        print(f"Saved latent UMAP (by id) to: {id_umap_path}")
+
+    # PCA: latent-space plot colored by origin
+    origin_pca_path = _plot_by_series(
+        origin_series,
+        pca_embedding,
+        "Latent space PCA by origin (real + synthetic)",
+        "latent_pca_by_origin.png",
+        x_label="PC1" if pca_embedding.shape[1] > 0 else "Latent-1",
+        y_label="PC2" if pca_embedding.shape[1] > 1 else "Latent-2",
+    )
+    print(f"Saved latent PCA (by origin) to: {origin_pca_path}")
+
+    # PCA: latent-space plot colored by `id`, if available
+    if id_series is not None:
+        id_pca_path = _plot_by_series(
+            id_series,
+            pca_embedding,
+            "Latent space PCA by id (real + synthetic)",
+            "latent_pca_by_id.png",
+            x_label="PC1" if pca_embedding.shape[1] > 0 else "Latent-1",
+            y_label="PC2" if pca_embedding.shape[1] > 1 else "Latent-2",
+        )
+        print(f"Saved latent PCA (by id) to: {id_pca_path}")
+
+    # Maintain backwards-compatible return of the origin-colored UMAP path
+    return origin_umap_path
 
 
 def decode_latent(decoder: DecoderC, z: torch.Tensor) -> np.ndarray:
@@ -433,6 +518,9 @@ def build_synthetic_cell(
     synthetic_id: str,
     var_template: pd.DataFrame,
     source_cell_idx: Optional[int] = None,
+    *,
+    origin: str = "aVAE",
+    extra_obs: Optional[dict] = None,
 ) -> ad.AnnData:
     """
     Create a single-cell AnnData object for a decoded synthetic profile.
@@ -453,9 +541,12 @@ def build_synthetic_cell(
     """
     decoded_expanded = decoded.reshape(1, -1)
     
-    obs_payload = {"origin": ["aVAE"]}
+    obs_payload = {"origin": [origin]}
     if source_cell_idx is not None:
         obs_payload["source_cell_idx"] = [source_cell_idx]
+    if extra_obs:
+        for key, value in extra_obs.items():
+            obs_payload[key] = [value]
     
     synthetic_obs = pd.DataFrame(obs_payload, index=[synthetic_id])
     
@@ -468,7 +559,12 @@ def build_synthetic_cell(
     return synthetic_adata
 
 
-def recompute_umap(adata: ad.AnnData, output_dir: str, save_prefix: str = "synthetic"):
+def recompute_umap(
+    adata: ad.AnnData,
+    output_dir: str,
+    save_prefix: str = "synthetic",
+    primary_color_key: str = "celltype_level_1",
+):
     """
     Recompute PCA, neighbors, and UMAP, then save plot.
     
@@ -480,6 +576,8 @@ def recompute_umap(adata: ad.AnnData, output_dir: str, save_prefix: str = "synth
         Output directory for saving plot
     save_prefix : str
         Prefix for saved plot filename
+    primary_color_key : str
+        Observation column to use for the primary UMAP coloring.
     """
     print("Recomputing PCA, neighbors, and UMAP...")
     
@@ -495,27 +593,109 @@ def recompute_umap(adata: ad.AnnData, output_dir: str, save_prefix: str = "synth
     print("  Computing UMAP...")
     sc.tl.umap(adata)
     
-    # Save UMAP plot
-    os.makedirs(output_dir, exist_ok=True)
+    # Save UMAP plots
+    plot_dir = os.path.join(output_dir, "umap_plots")
+    os.makedirs(plot_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%d%m%y_%H%M")
-    plot_path = os.path.join(output_dir, f"{save_prefix}_umap_{timestamp}.png")
 
-    
-    print(f"  Saving UMAP plot to: {plot_path}")
-    
-    # Use matplotlib to save directly to desired location
+    # Always plot both the requested key and origin
+    requested_keys = [primary_color_key, "origin"]
+    seen_keys: set[str] = set()
+    ordered_keys: list[str] = []
+    for key in requested_keys:
+        if key not in seen_keys:
+            ordered_keys.append(key)
+            seen_keys.add(key)
+
     import matplotlib.pyplot as plt
-    
-    # Plot UMAP
-    color_key = "celltype_level_1" if "celltype_level_1" in adata.obs.columns else "origin"
-    sc.pl.umap(adata, color=color_key, show=False)
-    
-    # Save the current figure
-    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
-    plt.close()
-    
+
+    # UMAP projections
+    for color_key in ordered_keys:
+        if color_key not in adata.obs.columns:
+            print(
+                f"  Skipping UMAP colored by '{color_key}' "
+                "(column not found in adata.obs)."
+            )
+            continue
+
+        print(f"  Saving UMAP plot colored by '{color_key}'.")
+        sc.pl.umap(adata, color=color_key, show=False)
+        safe_key = color_key.replace("/", "_")
+        plot_path = os.path.join(
+            plot_dir, f"{save_prefix}_umap_{safe_key}_{timestamp}.png"
+        )
+        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+    # PCA projections
+    for color_key in ordered_keys:
+        if color_key not in adata.obs.columns:
+            print(
+                f"  Skipping PCA colored by '{color_key}' "
+                "(column not found in adata.obs)."
+            )
+            continue
+
+        print(f"  Saving PCA plot colored by '{color_key}'.")
+        sc.pl.pca(adata, color=color_key, show=False)
+        safe_key = color_key.replace("/", "_")
+        pca_path = os.path.join(
+            plot_dir, f"{save_prefix}_pca_{safe_key}_{timestamp}.png"
+        )
+        plt.savefig(pca_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
     print("UMAP computation complete.")
 
+
+
+# ============================================================================
+# Interpolation helpers
+# ============================================================================
+
+
+def interpolate_latents(
+    start: np.ndarray, end: np.ndarray, n_interp: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Generate spherical linear interpolation (slerp) points between two vectors.
+    Returns the interpolated latent vectors and their normalized positions t.
+    """
+    if n_interp < 2:
+        raise ValueError("n_interp must be at least 2 to perform interpolation.")
+
+    start = np.asarray(start, dtype=float)
+    end = np.asarray(end, dtype=float)
+    if start.shape != end.shape:
+        raise ValueError("Latent vectors must have matching shapes for interpolation.")
+
+    t_values = np.linspace(0.0, 1.0, n_interp)
+    start_norm = np.linalg.norm(start)
+    end_norm = np.linalg.norm(end)
+
+    if start_norm == 0 or end_norm == 0:
+        # Fall back to linear interpolation if either vector is zero
+        latent_points = np.outer(1 - t_values, start) + np.outer(t_values, end)
+        return latent_points, t_values
+
+    start_unit = start / start_norm
+    end_unit = end / end_norm
+    dot = np.clip(np.dot(start_unit, end_unit), -1.0, 1.0)
+    theta = np.arccos(dot)
+
+    if np.isclose(theta, 0):
+        latent_points = np.outer(1 - t_values, start) + np.outer(t_values, end)
+        return latent_points, t_values
+
+    sin_theta = np.sin(theta)
+    latent_points = []
+    for t in t_values:
+        factor0 = np.sin((1 - t) * theta) / sin_theta
+        factor1 = np.sin(t * theta) / sin_theta
+        point = factor0 * start + factor1 * end
+        latent_points.append(point)
+
+    return np.vstack(latent_points), t_values
 
 def save_anndata(adata: ad.AnnData, output_path: str):
     """
@@ -550,6 +730,10 @@ def main(
     output_root: Optional[str] = None,
     save_h5ad: bool = False,
     generate_umap: bool = True,
+    umap_color_key: str = "celltype_level_1",
+    *,
+    interpolate: bool = False,
+    n_interp: int = 5,
 ):
     """
     Main function to generate synthetic cells.
@@ -572,15 +756,30 @@ def main(
         Whether to persist the augmented AnnData object (default: False)
     generate_umap : bool
         Whether to recompute and save UMAP plots (default: True)
+    umap_color_key : str
+        adata.obs column to color the primary UMAP plot (secondary plot uses 'origin')
     """
     print("=" * 70)
     print("Synthetic Cell Generation Script")
     print("=" * 70)
     
-    if not cell_indices:
-        cell_indices = [0]
-    cell_indices = list(cell_indices)
-    print(f"Preparing to generate {len(cell_indices)} synthetic cells.")
+    if interpolate:
+        if not cell_indices or len(cell_indices) != 2:
+            raise ValueError(
+                "Interpolation mode requires exactly two --cell_idx entries."
+            )
+        if n_interp < 2:
+            raise ValueError("Interpolation mode requires n_interp >= 2.")
+        print("Interpolation mode enabled.")
+        print(
+            f"Preparing to generate {n_interp} interpolated cells "
+            f"between indices {cell_indices[0]} and {cell_indices[1]}."
+        )
+    else:
+        if not cell_indices:
+            cell_indices = [0]
+        cell_indices = list(cell_indices)
+        print(f"Preparing to generate {len(cell_indices)} synthetic cells.")
     
     # Set output directory root near the checkpoint if not provided
     if output_root is None:
@@ -624,42 +823,101 @@ def main(
     synthetic_metadata_entries: list[tuple[str, dict]] = []
     synthetic_ids: list[str] = []
 
-    for i, cell_idx in enumerate(cell_indices):
-        print("-" * 40)
-        print(f"Processing source cell index: {cell_idx}")
-        
-        # Sample latent point
-        z, means, stds, z_np = sample_latent_point(meta_df, cell_idx, latent_dims)
-        
-        # Decode latent point
-        decoded = decode_latent(decoder, z)
-        
-        # Generate synthetic ID (includes both loop count and source idx)
-        synthetic_id = f"synthetic_{i:05d}_src{cell_idx:06d}"
-        synthetic_ids.append(synthetic_id)
-        kl_value = compute_kl_divergence(means, stds)
-        meta_entry = build_synthetic_metadata_entry(
-            meta_df=meta_df,
-            cell_idx=cell_idx,
-            synthetic_id=synthetic_id,
-            latent_values=z_np,
-            stds=stds,
-            kl_value=kl_value,
+    if interpolate:
+        cell_a, cell_b = cell_indices
+        means_a, stds_a = _get_latent_stats(meta_df, cell_a, latent_dims)
+        means_b, stds_b = _get_latent_stats(meta_df, cell_b, latent_dims)
+
+        latent_points, t_positions = interpolate_latents(means_a, means_b, n_interp)
+        std_points = np.array(
+            [(1 - t) * stds_a + t * stds_b for t in t_positions], dtype=float
         )
-        synthetic_metadata_entries.append(meta_entry)
-        
-        # Save decoded vector
-        save_decoded_vector(decoded, output_dir, cell_idx, synthetic_id)
-        
-        # Build synthetic AnnData (defer concatenation for efficiency)
-        synthetic_cells.append(
-            build_synthetic_cell(
-                decoded=decoded,
-                synthetic_id=synthetic_id,
-                var_template=var_template,
-                source_cell_idx=cell_idx,
+
+        for i, (latent_vec, std_vec, t_val) in enumerate(
+            zip(latent_points, std_points, t_positions)
+        ):
+            print("-" * 40)
+            print(
+                f"Interpolating between cells {cell_a} and {cell_b} "
+                f"(t={t_val:.2f})"
             )
-        )
+            z_tensor = torch.tensor(latent_vec, dtype=torch.float32).unsqueeze(0)
+            decoded = decode_latent(decoder, z_tensor)
+
+            synthetic_id = (
+                f"interp_{i:05d}_src{cell_a:06d}_to_{cell_b:06d}"
+            )
+            synthetic_ids.append(synthetic_id)
+            kl_value = compute_kl_divergence(latent_vec, std_vec)
+            base_idx = cell_a if t_val <= 0.5 else cell_b
+            extra_meta = {
+                "interpolation_pair": (cell_a, cell_b),
+                "t_position": float(t_val),
+            }
+            meta_entry = build_synthetic_metadata_entry(
+                meta_df=meta_df,
+                cell_idx=base_idx,
+                synthetic_id=synthetic_id,
+                latent_values=latent_vec,
+                stds=std_vec,
+                kl_value=kl_value,
+                origin="interpolation",
+                source_cell_idx=None,
+                extra_metadata=extra_meta,
+            )
+            synthetic_metadata_entries.append(meta_entry)
+
+            save_decoded_vector(decoded, output_dir, base_idx, synthetic_id)
+            synthetic_cells.append(
+                build_synthetic_cell(
+                    decoded=decoded,
+                    synthetic_id=synthetic_id,
+                    var_template=var_template,
+                    source_cell_idx=None,
+                    origin="interpolation",
+                    extra_obs={
+                        "interpolation_pair": f"{cell_a}-{cell_b}",
+                        "t_position": t_val,
+                    },
+                )
+            )
+    else:
+        for i, cell_idx in enumerate(cell_indices):
+            print("-" * 40)
+            print(f"Processing source cell index: {cell_idx}")
+            
+            # Sample latent point
+            z, means, stds, z_np = sample_latent_point(meta_df, cell_idx, latent_dims)
+            
+            # Decode latent point
+            decoded = decode_latent(decoder, z)
+            
+            # Generate synthetic ID (includes both loop count and source idx)
+            synthetic_id = f"synthetic_{i:05d}_src{cell_idx:06d}"
+            synthetic_ids.append(synthetic_id)
+            kl_value = compute_kl_divergence(means, stds)
+            meta_entry = build_synthetic_metadata_entry(
+                meta_df=meta_df,
+                cell_idx=cell_idx,
+                synthetic_id=synthetic_id,
+                latent_values=z_np,
+                stds=stds,
+                kl_value=kl_value,
+            )
+            synthetic_metadata_entries.append(meta_entry)
+            
+            # Save decoded vector
+            save_decoded_vector(decoded, output_dir, cell_idx, synthetic_id)
+            
+            # Build synthetic AnnData (defer concatenation for efficiency)
+            synthetic_cells.append(
+                build_synthetic_cell(
+                    decoded=decoded,
+                    synthetic_id=synthetic_id,
+                    var_template=var_template,
+                    source_cell_idx=cell_idx,
+                )
+            )
     updated_meta_path: Optional[str] = None
     if synthetic_metadata_entries:
         new_indices = [idx for idx, _ in synthetic_metadata_entries]
@@ -703,7 +961,12 @@ def main(
     
     # Recompute UMAP if requested
     if generate_umap:
-        recompute_umap(adata, output_dir, save_prefix="synthetic")
+        recompute_umap(
+            adata,
+            output_dir,
+            save_prefix="synthetic",
+            primary_color_key=umap_color_key,
+        )
     
     # Save modified AnnData if requested
     output_adata_path = os.path.join(output_dir, "adata_with_synthetic.h5ad")
@@ -717,7 +980,7 @@ def main(
     print("  - Decoded vectors: "
           f"{output_dir}/output_arrays/synthetic_decoded_vector_*.npy")
     if generate_umap:
-        print(f"  - UMAP plot: {output_dir}/synthetic_umap_*")
+        print(f"  - UMAP plots: {output_dir}/umap_plots/*.png")
     else:
         print("  - UMAP plot: skipped")
     if save_h5ad:
@@ -786,6 +1049,26 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip recomputing UMAP/plot (UMAP enabled by default)"
     )
+    parser.add_argument(
+        "--umap_color_key",
+        type=str,
+        default="celltype_level_1",
+        help=(
+            "Observation column to color the primary UMAP plot. "
+            "An additional plot colored by 'origin' is always produced."
+        ),
+    )
+    parser.add_argument(
+        "--interpolate",
+        action="store_true",
+        help="Enable latent interpolation mode (requires exactly two --cell_idx entries)",
+    )
+    parser.add_argument(
+        "--n_interp",
+        type=int,
+        default=5,
+        help="Number of interpolation points (used only when --interpolate is set)",
+    )
     
     args = parser.parse_args()
     
@@ -798,5 +1081,8 @@ if __name__ == "__main__":
         output_root=args.output_root,
         save_h5ad=args.save_h5ad,
         generate_umap=not args.skip_umap,
+        umap_color_key=args.umap_color_key,
+        interpolate=args.interpolate,
+        n_interp=args.n_interp,
     )
 
