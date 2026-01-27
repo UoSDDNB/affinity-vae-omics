@@ -45,20 +45,6 @@ def matrix_split_save(sc_matrix, cell_types, input_arrays_path):
         matrix_split_save(sc_matrix, cell_types, input_arrays_path)
         """
 
-    # Create a list to store individual arrays
-    cell_array_lst = list(range(sc_matrix.shape[0]))
-
-
-    # # Split the matrix into individual arrays
-    # for idx in range(sc_matrix.shape[0]):
-    #     cell_array_lst[idx] = sc_matrix[idx, :].reshape(-1,)  # added reshape to make sure that my arrays are 1D
-    #     # print a message to indicate progress at 25% intervals
-    #     if idx % (sc_matrix.shape[0] // 4) == 0:
-    #         print(f"Cells processed: {idx}/{sc_matrix.shape[0]}")
-
-    cell_array_lst = sc_matrix.tolist()  # Optimized version of above, encounters issues with lack of memory.
-    
-
     # Make sure that the user has a directory named 'input_arrays_path'.
     # if it exists, stop with error
     if os.path.exists(input_arrays_path):
@@ -68,27 +54,50 @@ def matrix_split_save(sc_matrix, cell_types, input_arrays_path):
         os.makedirs(input_arrays_path)
         print(f"Directory '{input_arrays_path}' created.")
 
-    # save each array with a file name prefixed with its class label
-    #idx = 0
+    # Get cell IDs from the index of the cell_types Series
     cell_names = cell_types.index
-    for idx, (sid, sample, label) in enumerate(zip(cell_names, cell_array_lst, cell_types)):
+    
+    # Check if the matrix is sparse. We'll use this to decide how to convert each row.
+    is_sparse = sp.issparse(sc_matrix)
+    
+    total_cells = sc_matrix.shape[0]
+    print(f"Starting to save {total_cells} individual cell arrays...")
+
+    # Iterate row by row. This is the memory-efficient part.
+    # We zip the cell IDs (sid) and labels together.
+    for idx, (sid, label) in enumerate(zip(cell_names, cell_types)):
+        
+        # 1. Get the single row from the matrix.
+        # Slicing a sparse matrix [idx, :] returns a (1, n_features) sparse matrix.
+        row_data = sc_matrix[idx, :]
+
+        # 2. Convert *only this row* to a dense 1D array.
+        # This is very cheap and uses almost no memory.
+        if is_sparse:
+            sample = row_data.toarray().flatten() # .toarray() on one row is fine
+        else:
+            sample = numpy.array(row_data).flatten() # Handle if matrix was already dense
+
+        # 3. Create the file name
         sample_name = str(label) + '_' + str(sid) + '.npy'
-        # sample = numpy.array(sample) #.reshape(1, -1)
-        # print(sample.shape)
 
-        # Build save path
+        # 4. Build save path
         save_path = os.path.join(input_arrays_path, sample_name)
-        # save the sample arrays
+        
+        # 5. Save the 1D dense array
         numpy.save(save_path, sample)
-        # if idx is a multiple of quater of the total loop itteratons, print a message to indicate progress
-        idx = idx + 1
-        # if idx is a multiple of quater of the total loop itteratons, print a message to indicate progress
-        if idx % (len(cell_names) // 4) == 0:
-            print(f"Saved sample {idx}/{len(cell_names)}")
 
-    # check that the number of files in input_arrays_path is equal to the number of saved samples
-    if idx == len(os.listdir(input_arrays_path)):
-        print(f"all {idx} samples saved successfully.")
+        # 6. Report progress
+        # Use (idx + 1) for 1-based counting
+        if (idx + 1) % (total_cells // 4) == 0:
+            print(f"Saved sample {idx + 1}/{total_cells}")
+
+    # Check that the number of files in input_arrays_path is equal to the number of saved samples
+    num_files_saved = len(os.listdir(input_arrays_path))
+    if num_files_saved == total_cells:
+        print(f"All {num_files_saved} samples saved successfully.")
+    else:
+        print(f"Warning: Expected {total_cells} samples, but only {num_files_saved} files were saved.")
 
 
 
@@ -170,8 +179,10 @@ if __name__ == '__main__':
     sc_matrix = adata.X
     print(r"Extracted the counts matrix")
     # convert to numpy array if it's a sparse matrix
-    if sp.issparse(sc_matrix):
-        sc_matrix = sc_matrix.toarray()
+    # dont convert to array if the matrix is too large
+    # RAM usage will be too high
+    # if sp.issparse(sc_matrix):
+    #     sc_matrix = sc_matrix.toarray()
 
 
     # Extract the cell_type column from the metadata
