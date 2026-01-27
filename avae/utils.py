@@ -97,7 +97,7 @@ def accuracy(
         )
 
     elif classifier == "KNN":
-        parameters = dict(n_neighbors=(range(1, 500, 100)))
+        parameters = dict(n_neighbors=(range(1, 250, 100))) #changed from 500 to 250 to allow for smaller datasets
         method = KNeighborsClassifier()
     else:
         raise ValueError("Invalid classifier type must be NN, KNN or LR")
