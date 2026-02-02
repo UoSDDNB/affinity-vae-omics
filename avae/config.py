@@ -43,8 +43,15 @@ class AffinityConfig(BaseModel):
         'flat',
         pattern='^(cycle_sigmoid|flat|cycle_linear|cycle_cosine|ramp)$',
     )
-    datapath: DirectoryPath = Field(None, description="Path to data directory")
+    datafile: FilePath = Field(None, description="Path to data file")
+    datapath: DirectoryPath = Field(None
+        , description="Path to data directory"
+    )
     datatype: str = Field('mrc', pattern='^npy|mrc$', description="Data type")
+    
+    cell_type_column_name: str = Field(
+        "celltype_level_1", description="The col name in metadata that contains the cell-type info"
+    )
     debug: bool = Field(False, description="Debug mode")
     depth: PositiveInt = Field(3, description="Number of layers")
     dynamic: bool = Field(False, description="Dynamic visualisation")
@@ -213,50 +220,62 @@ def load_config_params(
             )
 
     # Check for missing values and set to default values
+    dp = data.datapath
+    df = data.datafile
+
+    if (dp is None or dp == "None") and (df is None or df == "None"):
+        raise ValueError(
+        "You must provide either 'datapath' (directory of files) "
+        "or 'datafile' (h5ad file). Both are currently unset."
+    )
+
+    if (dp is not None and dp != "None") and (df is not None and df != "None"):
+        raise ValueError(
+        "You provided both 'datapath' and 'datafile'. "
+        "Only one is allowed."
+    )
     for key, val in data.model_dump().items():
-        if (val is None or val == "None") and key != "config_file":
-            #  make sure data variables are provided
-            if key == "datapath":
-                logging.error(
-                    "No value set for "
-                    + key
-                    + " in config file or command line arguments. Please set a value for this variable."
-                )
-                raise ValueError(
-                    "No value set for "
-                    + key
-                    + " in config file or command line arguments. Please set a value for this variable."
-                )
-            elif key == "affinity" or key == "classes":
+        if key in {"config_file", "datapath", "datafile"}:
+            continue
+        if (val is None or val == "None"):
+            if key == "affinity" or key == "classes":
                 logging.warning(
-                    "No value set for "
-                    + key
-                    + " in config file or command line arguments. Setting to default value."
-                )
+    f"No value set for {key} in config file or command line arguments."
+)
 
-                filename_default = os.path.join(
-                    getattr(data, 'datapath'), key + ".csv"
-                )
+                datafile = getattr(data, "datafile", None)
+                filename_default = None
 
-                if os.path.isfile(filename_default):
+# Only set filesystem defaults if datafile is a directory
+                if datafile is not None and os.path.isdir(datafile):
+                    filename_default = os.path.join(datafile, key + ".csv")
+                    logging.warning(f"Setting {key} to default value: {filename_default}")
+                else:
+                    logging.warning(
+        f"Not setting default for {key} because datafile is not a directory."
+    )
+
+# Only validate and assign if the default file actually exists
+                if filename_default is not None and os.path.isfile(filename_default):
                     try:
                         data.model_validate({key: filename_default})
-                        setattr(data, key, val)
+                        setattr(data, key, filename_default)
                     except ValidationError as e:
                         logging.info(e)
                         raise ValidationError(
-                            "Affinity and classes values are invalid:" + str(e)
-                        )
-
+            "Affinity and classes values are invalid: " + str(e)
+        )
                 else:
-                    setattr(data, key, val)
+                    # h5ad mode OR missing file → explicitly set to None
+                    setattr(data, key, None)
 
                 logging.info(
-                    "Setting up "
-                    + key
-                    + " in config file to "
-                    + str(getattr(data, key))
-                )
+                        "Setting up "
+                        + key
+                        + " in config file to "
+                        + str(getattr(data, key))
+                    )
+
 
             elif key == "state":
                 logging.warning(

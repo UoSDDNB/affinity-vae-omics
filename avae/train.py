@@ -20,8 +20,10 @@ from .utils_learning import add_meta, pass_batch, set_device
 
 
 def train(
-    datapath: str,
-    datatype: str,
+    datafile: str | None,
+    datapath: str | None,
+    datatype: str | None,
+    cell_type_column_name: str | None,
     restart: bool,
     state: str | None,
     lim: int | None,
@@ -71,7 +73,7 @@ def train(
 
     Parameters
     ----------
-    datapath: str
+    datafile: str
         Path to the data directory.
     datatype: str
         data file formats : mrc, npy
@@ -149,13 +151,15 @@ def train(
 
     # ############################### DATA ###############################
     trains, vals, tests, lookup, data_dim = load_data(
-        datapath=datapath,
-        datatype=datatype,
+            eval=False,
+            datafile=datafile,
+            cell_type_column_name=cell_type_column_name,
+            datapath=datapath,
+            datatype=datatype,
         lim=lim,
         splt=splt,
         batch_s=batch_s,
         no_val_drop=no_val_drop,
-        eval=False,
         affinity=affinity,
         classes=classes,
         gaussian_blur=gaussian_blur,

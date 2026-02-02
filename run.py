@@ -17,6 +17,13 @@ from avae.train import train
 @click.command(name="Affinity Trainer")
 @click.option("--config_file", type=click.Path(exists=True))
 @click.option(
+    "--datafile",
+    "-d",
+    type=str,
+    default=None,
+    help="Path to training data file.",
+)
+@click.option(
     "--datapath",
     "-d",
     type=str,
@@ -517,6 +524,16 @@ from avae.train import train
     is_flag=True,
     help="Normalise data",
 )
+
+@click.option(
+    "--cell_type_column_name",
+    "-ctcn",
+    type=str,
+    default="celltype_level_1",
+    help="The col name in metadata that contains the cell-type info, \n"
+    "Default is 'celltype_level_1'",
+)
+
 @click.option(
     "--shift_min",
     "-sftm",
@@ -543,8 +560,10 @@ from avae.train import train
 )
 def run(
     config_file,
+    datafile,
     datapath,
     datatype,
+    cell_type_column_name,
     restart,
     state,
     meta,
@@ -662,14 +681,16 @@ def run(
         run_pipeline(data)
 
     except Exception as e:
-        logging.exception("An exception was thrown!", e)
+        logging.exception("An exception was thrown!")#, e)
 
 
 def run_pipeline(data):
 
     if not data["eval"]:
         train(
+            datafile=data["datafile"],
             datapath=data["datapath"],
+            cell_type_column_name=data["cell_type_column_name"],
             datatype=data["datatype"],
             restart=data["restart"],
             state=data["state"],
@@ -715,6 +736,7 @@ def run_pipeline(data):
         )
     else:
         evaluate(
+            datafile=data["datafile"],
             datapath=data["datapath"],
             datatype=data["datatype"],
             state=data["state"],
