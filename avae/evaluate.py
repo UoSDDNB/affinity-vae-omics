@@ -84,6 +84,7 @@ def evaluate(
     tests, data_dim = load_data(
         datapath=datapath,
         datatype=datatype,
+        backed=backed,
         lim=lim,
         splt=splt,
         batch_s=batch_s,
