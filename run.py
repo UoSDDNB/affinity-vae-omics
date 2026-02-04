@@ -740,6 +740,7 @@ def run_pipeline(data):
             datafile=data["datafile"],
             datapath=data["datapath"],
             datatype=data["datatype"],
+            cell_type_column_name=data["cell_type_column_name"],
             state=data["state"],
             meta=data["meta"],
             lim=data["limit"],
