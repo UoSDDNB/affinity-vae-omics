@@ -28,7 +28,7 @@ from avae.train import train
     "-d",
     type=str,
     default=None,
-    help="Path to training data.",
+    help="Path to training data directory of .npy files.",
 )
 @click.option(
     "--datatype",
@@ -682,6 +682,7 @@ def run(
 
     except Exception as e:
         logging.exception("An exception was thrown!")#, e)
+        # ,e commented out as it's not required, + could raise issues with certain exception types? -MTN
 
 
 def run_pipeline(data):

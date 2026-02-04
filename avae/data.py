@@ -179,7 +179,7 @@ def load_data(
         else:
             lookup = None
 
-        # create ProteinDataset
+        # create (Protein)Dataset
         if datafile is not None:
             data = Dataset_h5ad_reader(
             datafile=datafile,
@@ -245,14 +245,14 @@ def load_data(
             batch_size=batch_s,
             num_workers=0,
             shuffle=True,
-            drop_last=True,
+            drop_last=True,             # drop data left over after last batch
         )
         vals = DataLoader(
             val_data,
             batch_size=batch_s,
             num_workers=0,              # for parallelisation, doesn't work on mac
             shuffle=True,
-            drop_last=(not no_val_drop),
+            drop_last=(not no_val_drop), # can leave end data in, as just evaluating
         )
         tests = []
         if len(vals) < 1 or len(trains) < 1:
