@@ -11,19 +11,22 @@ from scipy.ndimage import zoom # use for proteins, zooming on images
 from torch import Tensor # main ML library
 from torch.utils.data import DataLoader, Dataset, Subset # torch specific data objects, e.g. 'train' is a torch Dataloader
 from torchvision import transforms # for rescaling, centering
+import anndata
 
 from avae import settings # custom, e.g. interval of epochs to do a visualisation
 from avae.vis import format, plot_affinity_matrix, plot_classes_distribution # plots, class dist., aff. matrix
-
+import scipy.sparse as sp
 np.random.seed(42)
 from typing import Any, Literal, overload # type annotation, function overloading
 
 
 @overload
 def load_data(
+    eval: Literal[True],
     datapath: str,
     datatype: str,
-    eval: Literal[True],
+    datafile: None = None,
+    cell_type_column_name: None = None,
     lim: int | None = None,
     splt: int = 20,
     batch_s: int = 64,
@@ -40,9 +43,53 @@ def load_data(
 
 @overload
 def load_data(
-    datapath: str,
-    datatype: str,
+    eval: Literal[True],
+    datafile: str,
+    cell_type_column_name: str,
+    datapath: None = None,
+    datatype: None = None,
+    lim: int | None = None,
+    splt: int = 20,
+    batch_s: int = 64,
+    no_val_drop: bool = False,
+    affinity: str | None = None,
+    classes: str | None = None,
+    gaussian_blur: bool = False,
+    normalise: bool = False,
+    shift_min: bool = False,
+    rescale: bool | None = None,
+) -> tuple[DataLoader, DataLoader, DataLoader, pd.DataFrame, int]:
+    ...
+
+
+@overload
+def load_data(
     eval: Literal[False],
+    datafile: str,
+    cell_type_column_name: str,
+    datapath: None = None,
+    datatype: None = None,
+    lim: int | None = None,
+    splt: int = 20,
+    batch_s: int = 64,
+    no_val_drop: bool = False,
+    affinity: str | None = None,
+    classes: str | None = None,
+    gaussian_blur: bool = False,
+    normalise: bool = False,
+    shift_min: bool = False,
+    rescale: bool | None = None,
+) -> tuple[DataLoader, DataLoader, DataLoader, pd.DataFrame, int]:
+    ...
+
+
+@overload
+def load_data(
+    eval: Literal[False],
+    datafile: str,
+    cell_type_column_name: str,
+    datapath: None = None,
+    datatype: None = None,
     lim: int | None = None,
     splt: int = 20,
     batch_s: int = 64,
@@ -58,9 +105,11 @@ def load_data(
 
 
 def load_data(
-    datapath: str, # required
-    datatype: str, # required, it would be 'npy'
     eval: bool, # required
+    datafile: str,
+    cell_type_column_name: str,
+    datapath: None = None,
+    datatype: None = None,
     lim: int | None = None,
     splt: int = 20,
     batch_s: int = 64, # usually 16,32,64
@@ -120,8 +169,9 @@ def load_data(
     lookup: pd.DataFrame
         Affinity matrix, returned only if eval is False.
     """
-## note: we could change the DataLoader object for omics
-
+    if datafile is not None and datapath is not None:
+        raise RuntimeError("Provide either datafile or datapath, not both.")
+    
     if not eval:
         if affinity is not None: # only load the affinity matrix if no eval
             # load affinity matrix
@@ -129,9 +179,11 @@ def load_data(
         else:
             lookup = None
 
-        # create ProteinDataset
-        data = Dataset_reader(
-            datapath,
+        # create (Protein)Dataset
+        if datafile is not None:
+            data = Dataset_h5ad_reader(
+            datafile=datafile,
+            cell_type_column_name=cell_type_column_name,
             amatrix=lookup,
             classes=classes,
             gaussian_blur=gaussian_blur,
@@ -141,6 +193,19 @@ def load_data(
             lim=lim,
             datatype=datatype,
         )
+        elif datapath is not None:
+            data = Dataset_reader(
+                root_dir=datapath,
+                amatrix=lookup,
+                classes=classes,
+                gaussian_blur=gaussian_blur,
+                normalise=normalise,
+                shift_min=shift_min,
+                rescale=rescale,
+                lim=lim,
+                datatype=datatype,
+            )
+
 
         # ################# Visualising affinity matrix ###################
         if affinity is not None and settings.VIS_AFF:
@@ -156,6 +221,7 @@ def load_data(
         # split into train / val sets
         idx = np.random.permutation(len(data))                     # create index for train / val. Could stratify the index...
         s = int(np.ceil(len(data) * int(splt) / 100))
+        print(len(data),int(splt),s)
         if s < 2:
             raise RuntimeError(
                 "Train and validation sets must be larger than 1 sample, "
@@ -215,11 +281,23 @@ def load_data(
         else:
             lookup = None
 
-    if eval or ("test" in os.listdir(datapath)):                # legacy, replaced by evaluation script
-        if "test" in os.listdir(datapath):
-            datapath = os.path.join(datapath, "test")
-        data = Dataset_reader(
-            datapath,
+    #
+    if eval:# or ("test" in os.listdir(datapath)):                # legacy, replaced by evaluation script
+    #    if "test" in os.listdir(datapath):
+    #        datapath = os.path.join(datapath, "test")
+        if datapath is not None:
+            data = Dataset_reader(
+                root_dir=datapath,
+                gaussian_blur=gaussian_blur,
+                normalise=normalise,
+                shift_min=shift_min,
+                rescale=rescale,
+                lim=lim,
+                datatype=datatype,
+            )
+        elif datafile is not None:
+            data = Dataset_h5ad_reader(
+            datafile=datafile,
             gaussian_blur=gaussian_blur,
             normalise=normalise,
             shift_min=shift_min,
@@ -227,6 +305,8 @@ def load_data(
             lim=lim,
             datatype=datatype,
         )
+        else:
+            raise RuntimeError("Either datafile or datapath must be provided.")
 
         logging.info("############################################### EVAL")
         logging.info("Eval data size: {}".format(len(data)))
@@ -375,6 +455,156 @@ class Dataset_reader(Dataset):     # this is a custom torch dataset
         if self.transform:
             x = self.transform(x)
         return x
+
+class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
+    def __init__(
+        self,
+        datafile: str,
+        amatrix: npt.NDArray | None = None,
+        classes: str | None = None,
+        transform: typing.Any = None,
+        gaussian_blur: bool = False,
+        normalise: bool = False,
+        shift_min: bool = False,
+        rescale: bool | None = None,
+        lim: int | None = None,
+        datatype: str = "mrc",
+        cell_type_column_name: str = "celltype_level_1",
+    ):
+        super().__init__()
+        self.datatype = datatype
+        self.shift_min = shift_min
+        self.normalise = normalise
+        self.gaussian_blur = gaussian_blur
+        self.rescale = rescale
+        self.transform = transform
+        self.amatrix = amatrix
+        self.adata = anndata.read_h5ad(datafile)
+        self.sc_matrix = self.adata.X
+        self.is_sparse = sp.issparse(self.sc_matrix)
+
+        self.cell_types = self.adata.obs[cell_type_column_name].astype(str).str.replace(", ", "--").str.replace(" ", "-").to_numpy()
+        logging.info(f"Unique cell types: {np.unique(self.cell_types)}")
+        logging.info(f"Cell types shape: {self.cell_types}")
+
+        unique_classes = np.unique(self.cell_types).reshape(1, -1)
+
+        if classes is None:
+            self.final_classes = list(unique_classes[0])
+
+        else:
+            if isinstance(classes, str):
+                classes = list(pd.read_csv(classes).columns)
+            elif isinstance(classes, np.ndarray):
+                classes = classes.astype(str).tolist()
+            else:
+                classes = list(classes)
+
+            classes = set(classes)
+            self.final_classes = [str(c) for c in unique_classes[0] if str(c) in classes]
+
+
+        if self.amatrix is not None:
+            class_check = np.in1d(self.final_classes, self.amatrix.columns)     # subset the classes in the aff matrix
+            if not np.all(class_check):
+                raise RuntimeError(
+                    "Not all classes in the training set are present in the "
+                    "affinity matrix. Missing classes: {}".format(
+                        np.asarray(self.final_classes)[~class_check]
+                    )
+                )
+
+            index = [
+                self.amatrix.columns.get_loc(f"{columns}")
+                for columns in self.final_classes
+            ]
+            self.amatrix = self.amatrix.iloc[index, index]
+
+        self.indices = [i for i, ct in enumerate(self.cell_types) if ct in self.final_classes]
+        logging.info(f"self.indices before limit: {self.indices} ")
+        logging.info(f"Indices of selected classes: {self.indices} ")
+        
+        rng = np.random.default_rng(42)
+        rng.shuffle(self.indices) 
+        if lim is not None:
+            self.indices = self.indices[:lim]
+
+        logging.info(f"Dataset initialized with {len(self.indices)} cells from {len(self.final_classes)} classes.")                              # only load the paths up to the limit
+
+    def __len__(self):
+        return len(self.indices)
+
+
+    def dim(self):
+        row = self.adata[self.indices[0], :]
+        if self.is_sparse:
+            row = row.toarray().flatten()
+        else:
+            row = np.array(row).flatten()
+        return len(row)
+
+    def __getitem__(self, idx):
+        real_idx = self.indices[idx]
+
+        row = self.adata.X[real_idx, :]
+        if self.is_sparse:
+            data = row.toarray().flatten()
+        else:
+            data = np.array(row).flatten()
+
+        x = self.voxel_transformation(data)
+
+        y = self.cell_types[real_idx]
+
+        if self.amatrix is not None:
+            aff = self.amatrix.columns.get_loc(y)
+        else:
+            aff = 0  # placeholder for evaluation
+
+        meta_info = f"{real_idx}"  # using index as metadata
+        avg = np.around(np.average(x), decimals=4)
+        meta = {
+            "filename": str(real_idx),
+            "id": y,
+            "meta": meta_info,
+            "avg": avg
+        }
+
+        return x, y, aff, meta
+
+
+    def voxel_transformation(self, x):                      # define which scaling method we want
+
+        if self.rescale:
+            x = np.asarray(x, dtype=np.float32)
+            sh = tuple([self.rescale / s for s in x.shape])
+            x = zoom(x, sh)
+
+        # convert numpy to torch tensor
+        x = Tensor(x)
+
+        # unsqueeze adds a dimension for batch processing the data
+        x = x.unsqueeze(0) # leave this in, as required to track batches. Needs to be replicated in encoder output.
+
+        if self.shift_min:
+            x = (x - x.min()) / (x.max() - x.min())
+
+        if self.gaussian_blur:
+            T = transforms.GaussianBlur(3, sigma=(0.08, 10.0))
+            x = T(x)
+
+        if self.normalise:
+            # T = transforms.Normalize(0, 1, inplace=False) ## EP this doesn't work with 1D array, expects RGB image
+            # x = T(x) ## commented out for now as doesn't work with 1D omics array
+            ## changed to simple standardisation / z-score
+            x = (x - x.mean()) / x.std()
+
+        if self.transform:
+            x = self.transform(x)
+        return x
+
+
+
 
 
 

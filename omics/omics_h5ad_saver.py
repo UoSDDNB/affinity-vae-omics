@@ -188,11 +188,12 @@ if __name__ == '__main__':
     # Extract the cell_type column from the metadata
     print(f"Extracting cell type column '{cell_type_column_name}' from metadata...")
     cell_types = adata.obs[cell_type_column_name]
+    print(f"Extracted cell type column from metadata {cell_types}")
     # Modify cell_types to remove commas
     cell_types = cell_types.str.replace(', ', '--') # avoided _ as they're buggy
     # Modify cell_types to remove spaces
     cell_types = cell_types.str.replace(' ', '-')
-
+    print(f"Extracted clean cell type column from metadata {cell_types}") 
     # Identify the unique classes
     print("Identifying unique classes...")
     cell_types_unique = numpy.unique(cell_types).reshape(1, -1)
