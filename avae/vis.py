@@ -714,7 +714,7 @@ def accuracy_plot(
 
         plt.tight_layout()
         plt.title(
-            "Average accuracy at epoch {}: {:.3f}%".format(
+            "Average accuracy at epoch {}: {:.2f}%".format(
                 epoch, np.mean(avg_accuracy) * 100
             ),
             fontsize=7,                                       # ECP reduced font size to fit title
@@ -744,7 +744,7 @@ def accuracy_plot(
 
         plt.tight_layout()
         plt.title(
-            "Average accuracy at epoch {}: {:.3f}%".format(
+            "Average accuracy at epoch {}: {:.2f}%".format(
                 epoch, np.mean(avg_accuracy) * 100
             ),
             fontsize=7,
@@ -805,7 +805,7 @@ def accuracy_plot(
         disp_eval.plot(cmap=plt.cm.Blues, ax=ax, xticks_rotation=90)
         plt.tight_layout()
         plt.title(
-            "Average accuracy at epoch {}: {:.1f}%".format(
+            "Average accuracy at epoch {}: {:.2f}%".format(
                 epoch, np.mean(avg_accuracy_eval) * 100
             ),
             fontsize=7,
@@ -827,7 +827,7 @@ def accuracy_plot(
 
         plt.tight_layout()
         plt.title(
-            "Average accuracy at epoch {}: {:.1}% ".format(
+            "Average accuracy at epoch {}: {:.2f}% ".format(
                 epoch, np.mean(avg_accuracy_eval) * 100
             ),
             fontsize=7,
