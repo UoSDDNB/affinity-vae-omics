@@ -25,10 +25,18 @@ from avae.train import train
 )
 @click.option(
     "--datapath",
-    "-d",
+    "-dp",
     type=str,
     default=None,
     help="Path to training data directory of .npy files.",
+)
+@click.option(
+    "--backed",
+    "-bkd",
+    type=bool,
+    default=None,
+    is_flag=True,
+    help="Load h5ad file in backed mode.",
 )
 @click.option(
     "--datatype",
@@ -564,6 +572,7 @@ def run(
     datapath,
     datatype,
     cell_type_column_name,
+    backed,
     restart,
     state,
     meta,
@@ -693,6 +702,7 @@ def run_pipeline(data):
             datapath=data["datapath"],
             cell_type_column_name=data["cell_type_column_name"],
             datatype=data["datatype"],
+            backed = data["backed"],
             restart=data["restart"],
             state=data["state"],
             lim=data["limit"],
@@ -739,8 +749,9 @@ def run_pipeline(data):
         evaluate(
             datafile=data["datafile"],
             datapath=data["datapath"],
-            datatype=data["datatype"],
             cell_type_column_name=data["cell_type_column_name"],
+            datatype=data["datatype"],
+            backed = data["backed"],
             state=data["state"],
             meta=data["meta"],
             lim=data["limit"],

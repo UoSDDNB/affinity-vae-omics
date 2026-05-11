@@ -58,6 +58,7 @@ def load_data(
     normalise: bool = False,
     shift_min: bool = False,
     rescale: bool | None = None,
+    backed: bool | None = False 
 ) -> tuple[DataLoader, DataLoader, DataLoader, pd.DataFrame, int]:
     ...
 
@@ -79,6 +80,7 @@ def load_data(
     normalise: bool = False,
     shift_min: bool = False,
     rescale: bool | None = None,
+    backed: bool | None = False 
 ) -> tuple[DataLoader, DataLoader, DataLoader, pd.DataFrame, int]:
     ...
 
@@ -100,6 +102,7 @@ def load_data(
     normalise: bool = False,
     shift_min: bool = False,
     rescale: bool | None = None,
+     backed: bool | None = False 
 ) -> tuple[DataLoader, DataLoader, DataLoader, pd.DataFrame, int]:
     ...
 
@@ -121,7 +124,8 @@ def load_data(
     gaussian_blur: bool = False, # no required
     normalise: bool = False, # normalise to between 0 and 1? (check in code)
     shift_min: bool = False, # min / max normalisation
-    rescale: bool | None = None, # another transformation - look up what required
+    rescale: bool | None = None,# another transformation - look up what required
+    backed: bool | None = False # whether to use backed mode in the h5ad loader
 ) -> tuple[DataLoader, DataLoader, DataLoader, pd.DataFrame, int] | tuple[
     DataLoader, int
 ]:
@@ -156,6 +160,8 @@ def load_data(
         In True, the input data is normalised before being passed to the model.
     shift_min: bool
         If True, the minimum value of the input data is shifted to 0 and maximum to 1.
+    backed: bool
+        If True, and datafile is being used, the h5ad file is loaded in backed mode.
 
 
     Returns
@@ -192,6 +198,7 @@ def load_data(
             rescale=rescale,
             lim=lim,
             datatype=datatype,
+            backed = backed
         )
         elif datapath is not None:
             data = Dataset_reader(
@@ -205,6 +212,8 @@ def load_data(
                 lim=lim,
                 datatype=datatype,
             )
+        else:
+            raise RuntimeError("Either datafile or datapath must be provided.")
 
 
         # ################# Visualising affinity matrix ###################
@@ -227,13 +236,14 @@ def load_data(
                 "Train and validation sets must be larger than 1 sample, "
                 "train: {}, val: {}.".format(len(idx[:-s]), len(idx[-s:]))
             )
-        train_data = Subset(data, indices=idx[:-s])                 # subset based on train / val idx
-        val_data = Subset(data, indices=idx[-s:])
+        train_idx = idx[:-s]
+        val_idx   = idx[-s:]
 
-        # ################# Visualising class distribution ###################
+        train_y = data.labels[train_idx]
+        val_y   = data.labels[val_idx]
 
-        train_y = [y[1] for _, y in enumerate(train_data)]             # get the labels of the training data
-        val_y = [y[1] for _, y in enumerate(val_data)]                  # labels for the val set
+        train_data = Subset(data, train_idx)
+        val_data   = Subset(data, val_idx)           
 
         if settings.VIS_HIS:
             plot_classes_distribution(train_y, "train")
@@ -304,6 +314,7 @@ def load_data(
             rescale=rescale,
             lim=lim,
             datatype=datatype,
+            backed=backed
         )
         else:
             raise RuntimeError("Either datafile or datapath must be provided.")
@@ -348,6 +359,8 @@ class Dataset_reader(Dataset):     # this is a custom torch dataset
         self.paths = [
             f for f in os.listdir(root_dir) if "." + self.datatype in f   # create list of all the paths in the dir
         ]
+        self.labels = np.array([p.split("_")[0] for p in self.paths])
+
 
         random.shuffle(self.paths)                                  # randomize for the split
         ids = np.unique([f.split("_")[0] for f in self.paths])      # split out the classes
@@ -470,6 +483,7 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
         lim: int | None = None,
         datatype: str = "mrc",
         cell_type_column_name: str = "celltype_level_1",
+        backed: bool | None = False
     ):
         super().__init__()
         self.datatype = datatype
@@ -479,13 +493,31 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
         self.rescale = rescale
         self.transform = transform
         self.amatrix = amatrix
-        self.adata = anndata.read_h5ad(datafile)
-        self.sc_matrix = self.adata.X
-        self.is_sparse = sp.issparse(self.sc_matrix)
+        self.backed = backed
+        self.datafile = datafile
+        logging.info(f"Loading data backed mode: {self.backed}")
+        adata = anndata.read_h5ad(self.datafile, backed="r" if self.backed else None)
+        self.cell_types = (
+    adata.obs[cell_type_column_name]
+    .astype(str)
+    .str.replace(", ", "--")
+    .str.replace(" ", "-")
+    .to_numpy()
+)
 
-        self.cell_types = self.adata.obs[cell_type_column_name].astype(str).str.replace(", ", "--").str.replace(" ", "-").to_numpy()
+        if self.backed:
+            logging.info("Loading h5ad file in backed mode.")
+            adata.file.close()
+        else:
+            self._adata = adata  # keep in memory if not backed
+
+
+
+
+
         logging.info(f"Unique cell types: {np.unique(self.cell_types)}")
         # logging.info(f"Cell types shape: {self.cell_types}")
+
 
         unique_classes = np.unique(self.cell_types).reshape(1, -1)
 
@@ -528,6 +560,7 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
         rng.shuffle(self.indices) 
         if lim is not None:
             self.indices = self.indices[:lim]
+        self.labels = self.cell_types[self.indices]
 
         logging.info(f"Dataset initialized with {len(self.indices)} cells from {len(self.final_classes)} classes.")                              # only load the paths up to the limit
 
@@ -536,21 +569,32 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
 
 
     def dim(self):
-        row = self.adata[self.indices[0], :]
-        if self.is_sparse:
+        adata = self._get_adata()
+        row = adata.X[self.indices[0], :]
+        if sp.issparse(row):
             row = row.toarray().flatten()
         else:
             row = np.array(row).flatten()
         return len(row)
-
+    
+    def _get_adata(self):
+        if not hasattr(self, "_adata"):
+            self._adata = anndata.read_h5ad(
+                self.datafile,
+                backed="r" if self.backed else None,
+            )
+        return self._adata
+    
     def __getitem__(self, idx):
         real_idx = self.indices[idx]
 
-        row = self.adata.X[real_idx, :]
-        if self.is_sparse:
+        #row = self.adata.X[real_idx, :]
+        adata = self._get_adata()
+        row = adata.X[real_idx, :]
+        if sp.issparse(row):
             data = row.toarray().flatten()
         else:
-            data = np.array(row).flatten()
+            data = np.asarray(row).flatten()
 
         x = self.voxel_transformation(data)
 
@@ -604,6 +648,12 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
         return x
 
 
+    def _close_all_adatas(self):
+        if hasattr(self, "_adata"):
+            try:
+                self._adata.file.close()
+            except Exception:
+                pass
 
 
 

@@ -52,6 +52,7 @@ class AffinityConfig(BaseModel):
     cell_type_column_name: str = Field(
         "celltype_level_1", description="The col name in metadata that contains the cell-type info"
     )
+    backed: bool = Field(False, description="Load h5ad file in backed mode")
     debug: bool = Field(False, description="Debug mode")
     depth: PositiveInt = Field(3, description="Number of layers")
     dynamic: bool = Field(False, description="Dynamic visualisation")

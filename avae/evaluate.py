@@ -13,9 +13,10 @@ from .utils_learning import add_meta, pass_batch, set_device
 
 def evaluate(
     datafile: str | None,
-    datapath: str,
-    datatype: str,
+    datapath: str| None,
     cell_type_column_name: str | None,
+    datatype: str | None,
+    backed: bool | None,
     state: str,  # Removed the default value "None" (state should be provided, states dir can be extracted from state path) 17.09.25 MTN
     meta: str,  # Removed the default value "None" (meta should be provided) 17.09.25 MTN
     lim: int | None,
@@ -87,6 +88,7 @@ def evaluate(
     tests, data_dim = load_data(
         datapath=datapath,
         datatype=datatype,
+        backed=backed,
         lim=lim,
         splt=splt,
         batch_s=batch_s,

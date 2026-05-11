@@ -24,6 +24,7 @@ def train(
     datapath: str | None,
     datatype: str | None,
     cell_type_column_name: str | None,
+    backed: bool | None,
     restart: bool,
     state: str | None,
     lim: int | None,
@@ -166,6 +167,7 @@ def train(
         normalise=normalise,
         shift_min=shift_min,
         rescale=rescale,
+        backed=backed
     )
 
     # The spacial dimensions of the data
