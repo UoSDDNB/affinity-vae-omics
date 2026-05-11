@@ -30,7 +30,7 @@ def evaluate(
     rescale: bool,
     classifier: str,
     pose_dims: int,      # This is a quick fix. previously the pose_dims was taken from elsewhere in the model (see line 98)
-    color_lookup: dict | None,
+    color_lookup: dict | None
 ):
     """Function for evaluating the model. Loads the data, model and runs the evaluation. Saves the results of the
     evaluation in the plot and latents directories.
@@ -68,6 +68,10 @@ def evaluate(
         Number of pose dimensions.
     color_lookup: dict 
         Dictionary for mapping class names to colors for visualisations.
+    datafile: str
+        Path to data file (h5ad).
+    cell_type_column_name: str
+        Column name for cell types in h5ad file.
 
     """
 
@@ -93,6 +97,8 @@ def evaluate(
         normalise=normalise,
         shift_min=shift_min,
         rescale=rescale,
+        datafile=datafile,
+        cell_type_column_name=cell_type_column_name,
     )
 
     # ############################### MODEL ###############################
@@ -114,7 +120,7 @@ def evaluate(
 
     s = os.path.basename(state)
     fname = s.split(".")[0].split("_")
-    dshape = list(tests)[0][0].shape[2:]
+    dshape = list(tests)[0][0].shape[2:]    #this may cause memory issues if batch size is large -MTN 040226
     # pose_dims = fname[3]                     # added pose_dims as an input to the function rather than rely on this which threw error
 
     logging.info("Loading model from: {}".format(state))

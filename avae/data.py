@@ -516,7 +516,7 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
 
 
         logging.info(f"Unique cell types: {np.unique(self.cell_types)}")
-        logging.info(f"Cell types shape: {self.cell_types}")
+        # logging.info(f"Cell types shape: {self.cell_types}")
 
 
         unique_classes = np.unique(self.cell_types).reshape(1, -1)
@@ -553,8 +553,8 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
             self.amatrix = self.amatrix.iloc[index, index]
 
         self.indices = [i for i, ct in enumerate(self.cell_types) if ct in self.final_classes]
-        logging.info(f"self.indices before limit: {self.indices} ")
-        logging.info(f"Indices of selected classes: {self.indices} ")
+        #logging.info(f"self.indices before limit: {self.indices} ")
+        #logging.info(f"Indices of selected classes: {self.indices} ")
         
         rng = np.random.default_rng(42)
         rng.shuffle(self.indices) 
