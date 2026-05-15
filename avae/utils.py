@@ -22,7 +22,7 @@ def accuracy(
     y_train: npt.NDArray,
     x_val: npt.NDArray,
     y_val: npt.NDArray,
-    classifier: str = "NN",
+    classifier: str = "KNN",  # MTN: Default to KNN to avoid NN overfitting to complex coordinate relationships in poorly regularized latent spaces, which could mask failure to meaningfully group cells by biological similarity
 ) -> tuple[float, float, float, npt.NDArray, npt.NDArray]:
     """Computes the accuracy using a given classifier. Currently only supports
     neural network, K-nearest neighbors and logistic regression. A grid search on the
