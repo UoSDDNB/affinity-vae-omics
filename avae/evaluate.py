@@ -98,6 +98,7 @@ def evaluate(
         shift_min=shift_min,
         rescale=rescale,
         datafile=datafile,
+        classes=classes,
         cell_type_column_name=cell_type_column_name,
     )
 
