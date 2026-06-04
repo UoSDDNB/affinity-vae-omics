@@ -370,6 +370,8 @@ class Dataset_reader(Dataset):     # this is a custom torch dataset
         if classes is not None:                                      # only use the selected classes
             classes_list = pd.read_csv(classes).columns.tolist()
             self.final_classes = classes_list
+            logging.info(f"Requested classes file: {classes}")
+            logging.info(f"Using classes for dataset: {self.final_classes}")
 
         if self.amatrix is not None:
             class_check = np.in1d(self.final_classes, self.amatrix.columns)     # subset the classes in the aff matrix
@@ -536,6 +538,16 @@ class Dataset_h5ad_reader(Dataset):     # this is a custom torch dataset
 
             classes = set(classes)
             self.final_classes = [str(c) for c in unique_classes[0] if str(c) in classes]
+
+            if not self.final_classes:
+                raise RuntimeError(
+                    "None of the requested classes were found in the h5ad dataset. "
+                    "class lables must match normalised labels (e.g. 'B-cell' not 'B cell')."
+                    f"Requested classes: {sorted(classes)}; available classes: {list(unique_classes[0])}"
+                )
+            # Log requested classes (could be path or iterable) and final classes used
+        logging.info(f"Requested classes: {classes}")
+        logging.info(f"Using classes for dataset: {self.final_classes}")
 
 
         if self.amatrix is not None:
