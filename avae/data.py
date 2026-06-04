@@ -314,6 +314,7 @@ def load_data(
             rescale=rescale,
             lim=lim,
             datatype=datatype,
+            classes=classes,
             cell_type_column_name=cell_type_column_name,
             backed=backed
         )
