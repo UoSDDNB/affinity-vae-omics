@@ -8,7 +8,7 @@ This script:
 3. Decodes latent points into synthetic gene-expression profiles
 4. Inserts synthetic cells into an existing AnnData object
 5. Recomputes UMAP embeddings with the synthetic cells
-6. Saves outputs (decoded vectors, UMAP plot, modified AnnData)
+6. Saves a combined .h5ad (real + synthetic cells) compatible with Dataset_h5ad_reader
 """
 
 import argparse
@@ -156,6 +156,108 @@ def infer_latent_dims(meta_df: pd.DataFrame) -> int:
     
     print(f"Inferred latent dimensionality: {latent_dims}")
     return latent_dims
+
+
+def normalize_celltype_label(label: str) -> str:
+    """Mirror Dataset_h5ad_reader label normalization."""
+    return str(label).replace(", ", "--").replace(" ", "-")
+
+
+def resolve_h5ad_row(meta_df: pd.DataFrame, cell_idx: int, n_obs: int) -> int:
+    """
+    Map a meta-pickle row index to the corresponding h5ad row.
+
+    Training meta stores the h5ad row in the ``filename`` column.
+    """
+    if cell_idx >= len(meta_df):
+        raise ValueError(f"Cell index {cell_idx} out of range (max: {len(meta_df) - 1})")
+
+    if "filename" not in meta_df.columns:
+        raise ValueError(
+            "Metadata missing 'filename' column; cannot map meta row to h5ad row."
+        )
+
+    row = int(meta_df.iloc[cell_idx]["filename"])
+    if row < 0 or row >= n_obs:
+        raise ValueError(
+            f"Meta row {cell_idx} maps to h5ad row {row}, "
+            f"but adata has {n_obs} cells."
+        )
+    return row
+
+
+def get_source_celltype(
+    adata: ad.AnnData,
+    meta_df: pd.DataFrame,
+    cell_idx: int,
+    column_name: str,
+) -> str:
+    """Return the normalized cell type of the source real cell."""
+    if column_name not in adata.obs.columns:
+        raise ValueError(
+            f"Column '{column_name}' not found in adata.obs. "
+            f"Available columns: {list(adata.obs.columns)}"
+        )
+
+    h5ad_row = resolve_h5ad_row(meta_df, cell_idx, adata.n_obs)
+    raw_label = adata.obs.iloc[h5ad_row][column_name]
+    return normalize_celltype_label(raw_label)
+
+
+def finalize_combined_adata(
+    adata: ad.AnnData,
+    cell_type_column_name: str,
+) -> ad.AnnData:
+    """
+    Ensure obs columns required for VAE h5ad loading and synthetic filtering.
+    """
+    if cell_type_column_name not in adata.obs.columns:
+        raise ValueError(
+            f"Column '{cell_type_column_name}' missing from combined AnnData.obs."
+        )
+
+    if "origin" not in adata.obs.columns:
+        adata.obs["origin"] = "real"
+    else:
+        adata.obs["origin"] = adata.obs["origin"].fillna("real")
+
+    if "is_synthetic" not in adata.obs.columns:
+        adata.obs["is_synthetic"] = adata.obs["origin"] != "real"
+    else:
+        adata.obs["is_synthetic"] = adata.obs["is_synthetic"].fillna(
+            adata.obs["origin"] != "real"
+        )
+
+    return adata
+
+
+def validate_h5ad_output(
+    output_path: str,
+    cell_type_column_name: str,
+    expected_n_obs: int,
+    expected_n_vars: int,
+) -> None:
+    """Smoke-check that the written h5ad is readable and has expected shape."""
+    check = ad.read_h5ad(output_path, backed="r")
+    try:
+        if cell_type_column_name not in check.obs.columns:
+            raise ValueError(
+                f"Written h5ad missing '{cell_type_column_name}' in obs."
+            )
+        if check.n_obs != expected_n_obs:
+            raise ValueError(
+                f"Expected {expected_n_obs} cells, found {check.n_obs}."
+            )
+        if check.n_vars != expected_n_vars:
+            raise ValueError(
+                f"Expected {expected_n_vars} genes, found {check.n_vars}."
+            )
+        print(
+            f"h5ad validation passed: {check.n_obs} cells, {check.n_vars} genes."
+        )
+    finally:
+        if hasattr(check, "file") and check.file is not None:
+            check.file.close()
 
 
 def _get_latent_stats(
@@ -463,30 +565,44 @@ def decode_latent(decoder: DecoderC, z: torch.Tensor) -> np.ndarray:
     print("Decoding latent point...")
     
     with torch.no_grad():
-        # DecoderC expects (latent, pose) but pose can be None if pose_dims=0
-        # Check if decoder has pose attribute
         if hasattr(decoder, "pose") and decoder.pose:
-            # This decoder uses pose, but we'll pass None for now
-            # If needed, we can sample pose separately
-            decoded = decoder(z, None)
+            # Attempt to read pose_dims from attribute
+            pose_dims = getattr(decoder, "pose_dims", None)
+            
+            # Infer pose_dims from the first linear layer if attribute is missing
+            if pose_dims is None:
+                for module in decoder.modules():
+                    if isinstance(module, torch.nn.Linear):
+                        pose_dims = module.in_features - z.size(1)
+                        break
+                        
+            # Fallback if inference fails
+            if pose_dims is None:
+                pose_dims = 0
+                
+            if pose_dims > 0:
+                x_pose = torch.zeros((z.size(0), pose_dims), dtype=z.dtype, device=z.device)
+                decoded = decoder(z, x_pose)
+            else:
+                empty_pose = torch.empty((z.size(0), 0), dtype=z.dtype, device=z.device)
+                decoded = decoder(z, empty_pose)
         else:
-            decoded = decoder(z, None)
+            try:
+                decoded = decoder(z)
+            except TypeError:
+                decoded = decoder(z, None)
         
-        # DecoderC outputs shape (N, 1, input_size), so we need to squeeze
         decoded = decoded.cpu().numpy()
         
-        # Remove batch and channel dimensions if present
         if decoded.ndim > 1:
             decoded = decoded.squeeze()
         
-        # Ensure 1D output
         decoded = decoded.flatten()
     
     print(f"Decoded to expression profile of length {len(decoded)}")
     print(f"  Expression range: [{decoded.min():.4f}, {decoded.max():.4f}]")
     
     return decoded
-
 
 def save_decoded_vector(decoded: np.ndarray, output_dir: str, cell_idx: int, synthetic_id: str):
     """
@@ -517,9 +633,11 @@ def build_synthetic_cell(
     decoded: np.ndarray,
     synthetic_id: str,
     var_template: pd.DataFrame,
+    source_celltype: str,
+    cell_type_column_name: str,
     source_cell_idx: Optional[int] = None,
     *,
-    origin: str = "aVAE",
+    origin: str = "synthetic",
     extra_obs: Optional[dict] = None,
 ) -> ad.AnnData:
     """
@@ -533,6 +651,10 @@ def build_synthetic_cell(
         Unique identifier for the synthetic cell
     var_template : pd.DataFrame
         Gene metadata copied from the reference AnnData
+    source_celltype : str
+        Normalized cell type inherited from the source real cell
+    cell_type_column_name : str
+        Observation column used for VAE class labels
         
     Returns
     -------
@@ -541,7 +663,11 @@ def build_synthetic_cell(
     """
     decoded_expanded = decoded.reshape(1, -1)
     
-    obs_payload = {"origin": [origin]}
+    obs_payload = {
+        "origin": [origin],
+        "is_synthetic": [True],
+        cell_type_column_name: [source_celltype],
+    }
     if source_cell_idx is not None:
         obs_payload["source_cell_idx"] = [source_cell_idx]
     if extra_obs:
@@ -710,7 +836,9 @@ def save_anndata(adata: ad.AnnData, output_path: str):
     """
     print(f"Saving AnnData to: {output_path}")
     
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    parent = os.path.dirname(output_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     adata.write(output_path)
     
     print("AnnData saved successfully.")
@@ -728,9 +856,12 @@ def main(
     cell_indices: Optional[Sequence[int]] = None,
     output_suffix: Optional[str] = None,
     output_root: Optional[str] = None,
-    save_h5ad: bool = False,
+    output_h5ad: Optional[str] = None,
+    skip_h5ad: bool = False,
+    save_npy: bool = False,
     generate_umap: bool = True,
-    umap_color_key: str = "celltype_level_1",
+    cell_type_column_name: str = "celltype_level_1",
+    umap_color_key: Optional[str] = None,
     *,
     interpolate: bool = False,
     n_interp: int = 5,
@@ -747,18 +878,26 @@ def main(
     meta_path : str
         Path to the latent metadata (.pkl)
     cell_indices : Sequence[int], optional
-        One or more indices of real cells to sample from (default: [0])
+        Meta-pickle row indices of real cells to sample from (default: [0])
     output_suffix : Optional[str]
         Suffix for output directory (default: timestamp)
     output_root : Optional[str]
         Base directory for outputs (default: derived from checkpoint path)
-    save_h5ad : bool
-        Whether to persist the augmented AnnData object (default: False)
+    output_h5ad : Optional[str]
+        Path for combined h5ad output (default: output_dir/adata_with_synthetic.h5ad)
+    skip_h5ad : bool
+        Skip writing the combined h5ad (default: False)
+    save_npy : bool
+        Also save per-cell decoded vectors as .npy files (default: False)
     generate_umap : bool
         Whether to recompute and save UMAP plots (default: True)
-    umap_color_key : str
-        adata.obs column to color the primary UMAP plot (secondary plot uses 'origin')
+    cell_type_column_name : str
+        Observation column for cell-type labels (must match VAE training config)
+    umap_color_key : Optional[str]
+        adata.obs column to color the primary UMAP plot (defaults to cell_type_column_name)
     """
+    if umap_color_key is None:
+        umap_color_key = cell_type_column_name
     print("=" * 70)
     print("Synthetic Cell Generation Script")
     print("=" * 70)
@@ -812,10 +951,20 @@ def main(
     
     adata = ad.read_h5ad(adata_path)
     print(f"Loaded AnnData with {adata.n_obs} cells and {adata.n_vars} genes")
-    
+
+    if cell_type_column_name not in adata.obs.columns:
+        raise ValueError(
+            f"Column '{cell_type_column_name}' not found in input adata.obs. "
+            f"Available columns: {list(adata.obs.columns)}"
+        )
+
+    n_vars = adata.n_vars
+
     # Ensure origin metadata exists before appending new cells
     if "origin" not in adata.obs.columns:
         adata.obs["origin"] = "real"
+    if "is_synthetic" not in adata.obs.columns:
+        adata.obs["is_synthetic"] = False
     
     var_template = adata.var
     synthetic_cells: list[ad.AnnData] = []
@@ -867,12 +1016,18 @@ def main(
             )
             synthetic_metadata_entries.append(meta_entry)
 
-            save_decoded_vector(decoded, output_dir, base_idx, synthetic_id)
+            source_celltype = get_source_celltype(
+                adata, meta_df, base_idx, cell_type_column_name
+            )
+            if save_npy:
+                save_decoded_vector(decoded, output_dir, base_idx, synthetic_id)
             synthetic_cells.append(
                 build_synthetic_cell(
                     decoded=decoded,
                     synthetic_id=synthetic_id,
                     var_template=var_template,
+                    source_celltype=source_celltype,
+                    cell_type_column_name=cell_type_column_name,
                     source_cell_idx=None,
                     origin="interpolation",
                     extra_obs={
@@ -905,16 +1060,21 @@ def main(
                 kl_value=kl_value,
             )
             synthetic_metadata_entries.append(meta_entry)
-            
-            # Save decoded vector
-            save_decoded_vector(decoded, output_dir, cell_idx, synthetic_id)
-            
+
+            source_celltype = get_source_celltype(
+                adata, meta_df, cell_idx, cell_type_column_name
+            )
+            if save_npy:
+                save_decoded_vector(decoded, output_dir, cell_idx, synthetic_id)
+
             # Build synthetic AnnData (defer concatenation for efficiency)
             synthetic_cells.append(
                 build_synthetic_cell(
                     decoded=decoded,
                     synthetic_id=synthetic_id,
                     var_template=var_template,
+                    source_celltype=source_celltype,
+                    cell_type_column_name=cell_type_column_name,
                     source_cell_idx=cell_idx,
                 )
             )
@@ -934,23 +1094,16 @@ def main(
     if synthetic_cells:
         print("Concatenating synthetic cells into AnnData...")
         new_cells = ad.concat(synthetic_cells, axis=0, join="outer")
-        new_obs_names = new_cells.obs_names
         adata = ad.concat([adata, new_cells], axis=0, join="outer")
-        
-        # Ensure categorical metadata columns include the synthetic label
-        for meta_col in ("cell_type", "celltype_level_1"):
-            if meta_col in adata.obs.columns:
-                series = adata.obs[meta_col]
-                if pd.api.types.is_categorical_dtype(series):
-                    adata.obs[meta_col] = series.cat.add_categories(["aVAE"])
-                adata.obs.loc[new_obs_names, meta_col] = "aVAE"
-        
+        adata = finalize_combined_adata(adata, cell_type_column_name)
+
         print(
             f"Added {len(synthetic_cells)} synthetic cells. "
             f"Total cells now: {adata.n_obs}"
         )
     else:
         print("No synthetic cells were generated (empty cell_indices).")
+        adata = finalize_combined_adata(adata, cell_type_column_name)
     latent_umap_path = None
     if synthetic_metadata_entries:
         latent_umap_path = plot_latent_umap_from_metadata(
@@ -968,25 +1121,38 @@ def main(
             primary_color_key=umap_color_key,
         )
     
-    # Save modified AnnData if requested
-    output_adata_path = os.path.join(output_dir, "adata_with_synthetic.h5ad")
-    if save_h5ad:
+    # Save combined AnnData (primary output)
+    if output_h5ad is None:
+        output_adata_path = os.path.join(output_dir, "adata_with_synthetic.h5ad")
+    else:
+        output_adata_path = output_h5ad
+
+    if not skip_h5ad:
         save_anndata(adata, output_adata_path)
+        validate_h5ad_output(
+            output_adata_path,
+            cell_type_column_name,
+            expected_n_obs=adata.n_obs,
+            expected_n_vars=n_vars,
+        )
     
     print("=" * 70)
     print("Synthetic cell generation complete!")
     print("=" * 70)
     print("\nOutput summary:")
-    print("  - Decoded vectors: "
-          f"{output_dir}/output_arrays/synthetic_decoded_vector_*.npy")
+    if not skip_h5ad:
+        print(f"  - Combined AnnData: {output_adata_path}")
+    else:
+        print("  - Combined AnnData: skipped (--skip_h5ad)")
+    if save_npy:
+        print(
+            "  - Decoded vectors: "
+            f"{output_dir}/output_arrays/synthetic_decoded_vector_*.npy"
+        )
     if generate_umap:
         print(f"  - UMAP plots: {output_dir}/umap_plots/*.png")
     else:
         print("  - UMAP plot: skipped")
-    if save_h5ad:
-        print(f"  - Modified AnnData: {output_adata_path}")
-    else:
-        print("  - Modified AnnData: skipped (use --save_h5ad to enable)")
     if updated_meta_path:
         print(f"  - Latent metadata with synthetics: {updated_meta_path}")
     else:
@@ -1040,21 +1206,43 @@ if __name__ == "__main__":
         help="Optional base directory for outputs (default: checkpoint parent)"
     )
     parser.add_argument(
-        "--save_h5ad",
+        "--output_h5ad",
+        type=str,
+        default=None,
+        help="Path for combined h5ad output (default: output_dir/adata_with_synthetic.h5ad)",
+    )
+    parser.add_argument(
+        "--skip_h5ad",
         action="store_true",
-        help="Persist the AnnData with synthetic cells (default: False)"
+        help="Skip writing the combined h5ad file",
+    )
+    parser.add_argument(
+        "--save_npy",
+        action="store_true",
+        help="Also save per-cell decoded vectors as .npy files (default: False)",
     )
     parser.add_argument(
         "--skip_umap",
         action="store_true",
-        help="Skip recomputing UMAP/plot (UMAP enabled by default)"
+        help="Skip recomputing UMAP/plot (UMAP enabled by default)",
+    )
+    parser.add_argument(
+        "--cell_type_column_name",
+        "-ctcn",
+        type=str,
+        default="celltype_level_1",
+        help=(
+            "Observation column for cell-type labels "
+            "(must match VAE training config; default: celltype_level_1)"
+        ),
     )
     parser.add_argument(
         "--umap_color_key",
         type=str,
-        default="celltype_level_1",
+        default=None,
         help=(
-            "Observation column to color the primary UMAP plot. "
+            "Observation column to color the primary UMAP plot "
+            "(defaults to --cell_type_column_name). "
             "An additional plot colored by 'origin' is always produced."
         ),
     )
@@ -1079,8 +1267,11 @@ if __name__ == "__main__":
         cell_indices=args.cell_idx,
         output_suffix=args.output_suffix,
         output_root=args.output_root,
-        save_h5ad=args.save_h5ad,
+        output_h5ad=args.output_h5ad,
+        skip_h5ad=args.skip_h5ad,
+        save_npy=args.save_npy,
         generate_umap=not args.skip_umap,
+        cell_type_column_name=args.cell_type_column_name,
         umap_color_key=args.umap_color_key,
         interpolate=args.interpolate,
         n_interp=args.n_interp,
