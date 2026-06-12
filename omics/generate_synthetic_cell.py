@@ -264,7 +264,7 @@ def validate_h5ad_output(
 
 def _get_latent_stats(
     meta_df: pd.DataFrame, cell_idx: int, latent_dims: int
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Extract latent means and standard deviations for a given cell.
 
@@ -299,7 +299,16 @@ def _get_latent_stats(
     means = meta_df.iloc[cell_idx][lat_cols[:latent_dims]].to_numpy(dtype=float)
     stds = meta_df.iloc[cell_idx][std_cols[:latent_dims]].to_numpy(dtype=float)
 
-    return means, stds
+    # Automatically detect pose columns matching the 'posX' pattern
+    pose_cols = [col for col in meta_df.columns if col.startswith("pos") and col[3:].isdigit()]
+    
+    pose = None
+    if pose_cols:
+        # Ensure pose columns are sorted correctly (pos0, pos1)
+        pose_cols = sorted(pose_cols, key=lambda c: int(c[3:]))
+        pose = meta_df.iloc[cell_idx][pose_cols].to_numpy(dtype=float)
+
+    return means, stds, pose
 
 
 def compute_kl_divergence(means: np.ndarray, stds: np.ndarray) -> float:
@@ -319,9 +328,9 @@ def compute_kl_divergence(means: np.ndarray, stds: np.ndarray) -> float:
 
 def sample_latent_point(
     meta_df: pd.DataFrame, cell_idx: int, latent_dims: int, scale_factor: float = 1.0
-) -> tuple[torch.Tensor, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[torch.Tensor, Optional[torch.Tensor], np.ndarray, np.ndarray, np.ndarray]:
     """
-    Sample a latent point from a real cell's latent distribution.
+    Sample a latent point and extract the corresponding pose tensor from a real cell's latent distribution.
     
     Parameters
     ----------
@@ -344,8 +353,9 @@ def sample_latent_point(
         Standard deviation parameters used for sampling.
     latent_values : np.ndarray
         Sampled latent vector without batch dimension.
+    pose_tensor : Optional[torch.Tensor]
     """
-    means, stds = _get_latent_stats(meta_df, cell_idx, latent_dims)
+    means, stds, pose_np = _get_latent_stats(meta_df, cell_idx, latent_dims)
 
     # Apply the scale factor to the standard deviation
     scaled_stds = stds * scale_factor
@@ -356,11 +366,16 @@ def sample_latent_point(
     # Convert numpy array to a torch tensor with an added batch dimension
     z_tensor = torch.tensor(z, dtype=torch.float32).unsqueeze(0)
     
+    pose_tensor = None
+    if pose_np is not None:
+        pose_tensor = torch.tensor(pose_np, dtype=torch.float32).unsqueeze(0)
+
     print(f"Sampled latent point from cell {cell_idx} (scale factor: {scale_factor})")
     print(f"  Mean range: [{means.min():.4f}, {means.max():.4f}]")
-    print(f"  Sampled range: [{z.min():.4f}, {z.max():.4f}]")
-    
-    return z_tensor, means, stds, z
+    if pose_np is not None:
+        print(f"  Pose captured: {pose_np}")
+
+    return z_tensor, pose_tensor, means, stds, z
 
 
 def build_synthetic_metadata_entry(
@@ -551,7 +566,7 @@ def plot_latent_umap_from_metadata(
     return origin_umap_path
 
 
-def decode_latent(decoder: DecoderC, z: torch.Tensor) -> np.ndarray:
+def decode_latent(decoder: DecoderC, z: torch.Tensor, pose_tensor: Optional[torch.Tensor] = None) -> np.ndarray:
     """
     Decode a latent point into a gene-expression profile.
     
@@ -571,26 +586,28 @@ def decode_latent(decoder: DecoderC, z: torch.Tensor) -> np.ndarray:
     
     with torch.no_grad():
         if hasattr(decoder, "pose") and decoder.pose:
-            # Attempt to read pose_dims from attribute
-            pose_dims = getattr(decoder, "pose_dims", None)
-            
-            # Infer pose_dims from the first linear layer if attribute is missing
-            if pose_dims is None:
-                for module in decoder.modules():
-                    if isinstance(module, torch.nn.Linear):
-                        pose_dims = module.in_features - z.size(1)
-                        break
-                        
-            # Fallback if inference fails
-            if pose_dims is None:
-                pose_dims = 0
-                
-            if pose_dims > 0:
-                x_pose = torch.zeros((z.size(0), pose_dims), dtype=z.dtype, device=z.device)
+            # If we successfully extracted a pose tensor from the metadata, use it
+            if pose_tensor is not None:
+                # Ensure the tensor is on the same device as the model
+                x_pose = pose_tensor.to(z.device)
                 decoded = decoder(z, x_pose)
             else:
-                empty_pose = torch.empty((z.size(0), 0), dtype=z.dtype, device=z.device)
-                decoded = decoder(z, empty_pose)
+                # Fallback zero-tensor logic if pose is required by model but missing from metadata
+                pose_dims = getattr(decoder, "pose_dims", None)
+                if pose_dims is None:
+                    for module in decoder.modules():
+                        if isinstance(module, torch.nn.Linear):
+                            pose_dims = module.in_features - z.size(1)
+                            break
+                if pose_dims is None:
+                    pose_dims = 0
+                    
+                if pose_dims > 0:
+                    x_pose = torch.zeros((z.size(0), pose_dims), dtype=z.dtype, device=z.device)
+                    decoded = decoder(z, x_pose)
+                else:
+                    empty_pose = torch.empty((z.size(0), 0), dtype=z.dtype, device=z.device)
+                    decoded = decoder(z, empty_pose)
         else:
             try:
                 decoded = decoder(z)
@@ -608,7 +625,6 @@ def decode_latent(decoder: DecoderC, z: torch.Tensor) -> np.ndarray:
     print(f"  Expression range: [{decoded.min():.4f}, {decoded.max():.4f}]")
     
     return decoded
-
 
 def save_decoded_vector(decoded: np.ndarray, output_dir: str, cell_idx: int, synthetic_id: str):
     """
@@ -815,6 +831,25 @@ def recompute_umap(
     # Combine for plotting
     plot_adata = ad.concat([real_adata, synth_adata], axis=0)
 
+    # ------------------------------------------------------------------------
+    # Create Detailed Plotting Column
+    # ------------------------------------------------------------------------
+    print("Applying custom colour palette for synthetic differentiation...")
+    detailed_key = f"{primary_color_key}_detailed"
+    
+    # Standardise all strings to match normalize_celltype_label output
+    plot_adata.obs[detailed_key] = (
+        plot_adata.obs[primary_color_key]
+        .astype(str)
+        .str.replace(", ", "--")
+        .str.replace(" ", "-")
+    )
+    
+    synth_mask = plot_adata.obs["is_synthetic"] == True
+    plot_adata.obs.loc[synth_mask, detailed_key] += "_synthetic"
+    plot_adata.obs[detailed_key] = plot_adata.obs[detailed_key].astype("category")
+    # ------------------------------------------------------------------------
+
     print(f"Computing embeddings on {plot_adata.n_obs} cells...")
     sc.tl.pca(plot_adata, svd_solver="arpack")
     sc.pp.neighbors(plot_adata, n_neighbors=15, n_pcs=40)
@@ -825,7 +860,36 @@ def recompute_umap(
     os.makedirs(plot_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%d%m%y_%H%M")
 
-    requested_keys = [primary_color_key, "origin"]
+    # --- Define Explicit Color Palette ---
+    custom_palette = {
+        "B": (1.0, 0.0, 0.0),
+        "B_synthetic": (0.5, 0.0, 0.0),
+        "CD4-T": (0.0, 1.0, 0.0),
+        "CD4-T_synthetic": (0.0, 0.5, 0.0),
+        "CD8-T": (0.0, 0.0, 1.0),
+        "CD8-T_synthetic": (0.0, 0.0, 0.5),
+        "other-T": (0.0, 0.1, 0.1),
+        "other-T_synthetic": (0.0, 0.5, 0.5),
+        "t_cell": (0.0, 0.9, 0.9),
+        "t_cell_synthetic": (0.0, 0.4, 0.4),
+        "DC": (1.0, 1.0, 0.0),
+        "DC_synthetic": (0.5, 0.5, 0.0),
+        "Mono": (1.0, 0.5, 0.0),
+        "Mono_synthetic": (1.0, 0.8, 0.4),
+        "NK": (1.0, 0.0, 1.0),
+        "NK_synthetic": (0.5, 0.0, 0.5),
+    }
+
+    # Add fallback colors for missing classes to prevent KeyError
+    import matplotlib.colors as mcolors
+    available_colors = list(mcolors.TABLEAU_COLORS.values())
+    unique_labels = plot_adata.obs[detailed_key].unique()
+    for i, label in enumerate(unique_labels):
+        if label not in custom_palette:
+            custom_palette[label] = available_colors[i % len(available_colors)]
+
+    # Add the detailed key to the plotting sequence
+    requested_keys = [primary_color_key, detailed_key, "origin"]
     ordered_keys = []
     seen = set()
     for key in requested_keys:
@@ -835,7 +899,10 @@ def recompute_umap(
 
     for color_key in ordered_keys:
         print(f"  Saving UMAP plot colored by '{color_key}'.")
-        sc.pl.umap(plot_adata, color=color_key, show=False, title=f"UMAP ({color_key}, scale={scale_factor})")
+        # Apply the explicit palette only to the detailed plot
+        palette_arg = custom_palette if color_key == detailed_key else None
+        
+        sc.pl.umap(plot_adata, color=color_key, palette=palette_arg, show=False, title=f"UMAP ({color_key}, scale={scale_factor})")
         safe_key = color_key.replace("/", "_")
         plot_path = os.path.join(plot_dir, f"{save_prefix}_umap_{safe_key}_s{scale_factor}_{timestamp}.png")
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
@@ -844,7 +911,9 @@ def recompute_umap(
     # PCA projections
     for color_key in ordered_keys:
         print(f"  Saving PCA plot colored by '{color_key}'.")
-        sc.pl.pca(plot_adata, color=color_key, show=False, title=f"PCA ({color_key}, scale={scale_factor})")
+        palette_arg = custom_palette if color_key == detailed_key else None
+        
+        sc.pl.pca(plot_adata, color=color_key, palette=palette_arg, show=False, title=f"PCA ({color_key}, scale={scale_factor})")
         safe_key = color_key.replace("/", "_")
         pca_path = os.path.join(plot_dir, f"{save_prefix}_pca_{safe_key}_s{scale_factor}_{timestamp}.png")
         plt.savefig(pca_path, dpi=300, bbox_inches="tight")
@@ -1049,13 +1118,13 @@ def main(
             print("-" * 40)
             print(f"Processing source cell index: {cell_idx}")
             
-            # Sample latent point using the scale_factor
-            z, means, stds, z_np = sample_latent_point(
+            # Capture the new pose_tensor variable
+            z, pose_tensor, means, stds, z_np = sample_latent_point(
                 meta_df, cell_idx, latent_dims, scale_factor=scale_factor
             )
             
-            # Decode latent point
-            decoded = decode_latent(decoder, z)
+            # Pass pose_tensor into decode_latent
+            decoded = decode_latent(decoder, z, pose_tensor)
             
             # Generate synthetic ID (includes both loop count and source idx)
             synthetic_id = f"synthetic_{i:05d}_src{cell_idx:06d}"
