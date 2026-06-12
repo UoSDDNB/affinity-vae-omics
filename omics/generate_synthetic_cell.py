@@ -1051,13 +1051,23 @@ def main(
 
     if interpolate:
         cell_a, cell_b = cell_indices
-        means_a, stds_a = _get_latent_stats(meta_df, cell_a, latent_dims)
-        means_b, stds_b = _get_latent_stats(meta_df, cell_b, latent_dims)
+        
+        # 1. Unpack all three variables (means, stds, pose)
+        means_a, stds_a, pose_a = _get_latent_stats(meta_df, cell_a, latent_dims)
+        means_b, stds_b, pose_b = _get_latent_stats(meta_df, cell_b, latent_dims)
 
+        # 2. Interpolate latent vectors and standard deviations
         latent_points, t_positions = interpolate_latents(means_a, means_b, n_interp)
         std_points = np.array(
             [(1 - t) * stds_a + t * stds_b for t in t_positions], dtype=float
         )
+        
+        # 3. Interpolate the pose variables (if they exist)
+        pose_points = None
+        if pose_a is not None and pose_b is not None:
+            pose_points = np.array(
+                [(1 - t) * pose_a + t * pose_b for t in t_positions], dtype=float
+            )
 
         for i, (latent_vec, std_vec, t_val) in enumerate(
             zip(latent_points, std_points, t_positions)
@@ -1067,8 +1077,17 @@ def main(
                 f"Interpolating between cells {cell_a} and {cell_b} "
                 f"(t={t_val:.2f})"
             )
+            
+            # Construct latent tensor
             z_tensor = torch.tensor(latent_vec, dtype=torch.float32).unsqueeze(0)
-            decoded = decode_latent(decoder, z_tensor)
+            
+            # Construct pose tensor for this specific t_val step
+            pose_tensor = None
+            if pose_points is not None:
+                pose_tensor = torch.tensor(pose_points[i], dtype=torch.float32).unsqueeze(0)
+
+            # Pass both tensors to the decoder
+            decoded = decode_latent(decoder, z_tensor, pose_tensor)
 
             synthetic_id = (
                 f"interp_{i:05d}_src{cell_a:06d}_to_{cell_b:06d}"
@@ -1111,50 +1130,6 @@ def main(
                         "interpolation_pair": f"{cell_a}-{cell_b}",
                         "t_position": t_val,
                     },
-                )
-            )
-    else:
-        for i, cell_idx in enumerate(cell_indices):
-            print("-" * 40)
-            print(f"Processing source cell index: {cell_idx}")
-            
-            # Capture the new pose_tensor variable
-            z, pose_tensor, means, stds, z_np = sample_latent_point(
-                meta_df, cell_idx, latent_dims, scale_factor=scale_factor
-            )
-            
-            # Pass pose_tensor into decode_latent
-            decoded = decode_latent(decoder, z, pose_tensor)
-            
-            # Generate synthetic ID (includes both loop count and source idx)
-            synthetic_id = f"synthetic_{i:05d}_src{cell_idx:06d}"
-            synthetic_ids.append(synthetic_id)
-            kl_value = compute_kl_divergence(means, stds)
-            meta_entry = build_synthetic_metadata_entry(
-                meta_df=meta_df,
-                cell_idx=cell_idx,
-                synthetic_id=synthetic_id,
-                latent_values=z_np,
-                stds=stds,
-                kl_value=kl_value,
-            )
-            synthetic_metadata_entries.append(meta_entry)
-
-            source_celltype = get_source_celltype(
-                adata, meta_df, cell_idx, cell_type_column_name
-            )
-            if save_npy:
-                save_decoded_vector(decoded, output_dir, cell_idx, synthetic_id)
-
-            # Build synthetic AnnData (defer concatenation for efficiency)
-            synthetic_cells.append(
-                build_synthetic_cell(
-                    decoded=decoded,
-                    synthetic_id=synthetic_id,
-                    var_template=var_template,
-                    source_celltype=source_celltype,
-                    cell_type_column_name=cell_type_column_name,
-                    source_cell_idx=cell_idx,
                 )
             )
     updated_meta_path: Optional[str] = None
