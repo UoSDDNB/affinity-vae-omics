@@ -377,7 +377,6 @@ def sample_latent_point(
 
     return z_tensor, pose_tensor, means, stds, z
 
-
 def build_synthetic_metadata_entry(
     meta_df: pd.DataFrame,
     cell_idx: int,
@@ -386,6 +385,7 @@ def build_synthetic_metadata_entry(
     stds: np.ndarray,
     kl_value: float,
     *,
+    pose_values: Optional[np.ndarray] = None,  # Added this parameter
     origin: str = "synthetic",
     source_cell_idx: Optional[int] = None,
     extra_metadata: Optional[dict] = None,
@@ -407,6 +407,16 @@ def build_synthetic_metadata_entry(
         if idx >= stds.shape[0]:
             break
         entry[col] = stds[idx]
+
+    # --- NEW LOGIC: Update pose columns if new values are provided ---
+    if pose_values is not None:
+        pose_cols = [c for c in meta_df.columns if c.startswith("pos") and c[3:].isdigit()]
+        pose_cols = sorted(pose_cols, key=lambda c: int(c[3:]))
+        for idx, col in enumerate(pose_cols):
+            if idx >= pose_values.shape[0]:
+                break
+            entry[col] = pose_values[idx]
+    # -----------------------------------------------------------------
 
     entry["kl_divergence"] = kl_value
     entry["source_cell_idx"] = (
@@ -564,6 +574,59 @@ def plot_latent_umap_from_metadata(
 
     # Maintain backwards-compatible return of the origin-colored UMAP path
     return origin_umap_path
+
+def plot_pose_scatter_from_metadata(
+    meta_df: pd.DataFrame,
+    output_dir: str,
+) -> Optional[str]:
+    """
+    Generate a 2D scatter plot of pose variables coloured by origin.
+    Returns None if pose is not exactly 2-dimensional.
+    """
+    pose_cols = [col for col in meta_df.columns if col.startswith("pos") and col[3:].isdigit()]
+    
+    if len(pose_cols) != 2:
+        print(f"Pose dimensionality is {len(pose_cols)}. Skipping 2D pose scatter plot.")
+        return None
+
+    pose_cols = sorted(pose_cols, key=lambda c: int(c[3:]))
+    x_col, y_col = pose_cols
+
+    origin_series = (
+        meta_df["origin"].fillna("real")
+        if "origin" in meta_df.columns
+        else pd.Series(["real"] * len(meta_df), index=meta_df.index)
+    )
+
+    os.makedirs(output_dir, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    cmap = plt.get_cmap("tab10")
+
+    unique_vals = sorted(origin_series.dropna().unique())
+    for idx, label in enumerate(unique_vals):
+        mask = origin_series == label
+        color = cmap(idx % 10)
+        ax.scatter(
+            meta_df.loc[mask, x_col],
+            meta_df.loc[mask, y_col],
+            s=15,
+            alpha=0.4,
+            label=label,
+            facecolor=color,
+            edgecolor="none",
+        )
+
+    ax.set_xlabel(x_col)
+    ax.set_ylabel(y_col)
+    ax.set_title("2D Pose Scatter by Origin")
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+
+    plot_path = os.path.join(output_dir, "pose_scatter_by_origin.png")
+    plt.savefig(plot_path, dpi=300)
+    plt.close(fig)
+    return plot_path
 
 
 def decode_latent(decoder: DecoderC, z: torch.Tensor, pose_tensor: Optional[torch.Tensor] = None) -> np.ndarray:
@@ -938,7 +1001,8 @@ def main(
     *,
     interpolate: bool = False,
     n_interp: int = 5,
-    scale_factor: float = 1.0,  # Add this parameter
+    scale_factor: float = 1.0,
+    pose_interp_method: str = "lerp",
 ):
     """
     Main function to generate synthetic cells.
@@ -969,6 +1033,14 @@ def main(
         Observation column for cell-type labels (must match VAE training config)
     umap_color_key : Optional[str]
         adata.obs column to color the primary UMAP plot (defaults to cell_type_column_name)
+    interpolate : bool
+        Enable latent interpolation mode
+    n_interp : int
+        Number of interpolation points
+    scale_factor : float
+        Multiplier for the latent standard deviation
+    pose_interp_method : str
+        Method for pose interpolation ('lerp' or 'slerp')
     """
     if umap_color_key is None:
         umap_color_key = cell_type_column_name
@@ -1062,9 +1134,12 @@ def main(
         # 3. Interpolate the pose variables (if they exist)
         pose_points = None
         if pose_a is not None and pose_b is not None:
-            pose_points = np.array(
-                [(1 - t) * pose_a + t * pose_b for t in t_positions], dtype=float
-            )
+            if pose_interp_method.lower() == "slerp":
+                pose_points, _ = interpolate_latents(pose_a, pose_b, n_interp)
+            else:
+                pose_points = np.array(
+                    [(1 - t) * pose_a + t * pose_b for t in t_positions], dtype=float
+                )
 
         for i, (latent_vec, std_vec, t_val) in enumerate(
             zip(latent_points, std_points, t_positions)
@@ -1096,6 +1171,8 @@ def main(
                 "interpolation_pair": (cell_a, cell_b),
                 "t_position": float(t_val),
             }
+            current_pose_val = pose_points[i] if pose_points is not None else None
+        
             meta_entry = build_synthetic_metadata_entry(
                 meta_df=meta_df,
                 cell_idx=base_idx,
@@ -1103,6 +1180,7 @@ def main(
                 latent_values=latent_vec,
                 stds=std_vec,
                 kl_value=kl_value,
+                pose_values=current_pose_val,  # Pass the intermediate pose here
                 origin="interpolation",
                 source_cell_idx=None,
                 extra_metadata=extra_meta,
@@ -1129,6 +1207,57 @@ def main(
                     },
                 )
             )
+    else:
+        # Standard generation mode (no interpolation)
+        for i, cell_idx in enumerate(cell_indices):
+            print("-" * 40)
+            print(f"Processing source cell index: {cell_idx}")
+            
+            # Sample latent point and extract pose
+            z, pose_tensor, means, stds, z_np = sample_latent_point(
+                meta_df, cell_idx, latent_dims, scale_factor=scale_factor
+            )
+            
+            # Decode latent point using captured pose
+            decoded = decode_latent(decoder, z, pose_tensor)
+            
+            # Generate ID
+            synthetic_id = f"synthetic_{i:05d}_src{cell_idx:06d}"
+            synthetic_ids.append(synthetic_id)
+            
+            # Compute stats and build metadata
+            kl_value = compute_kl_divergence(means, stds)
+            meta_entry = build_synthetic_metadata_entry(
+                meta_df=meta_df,
+                cell_idx=cell_idx,
+                synthetic_id=synthetic_id,
+                latent_values=z_np,
+                stds=stds,
+                kl_value=kl_value,
+                pose_values=pose_np if 'pose_np' in locals() else None, # Pass it here
+            )
+            synthetic_metadata_entries.append(meta_entry)
+
+            # Retrieve cell type
+            source_celltype = get_source_celltype(
+                adata, meta_df, cell_idx, cell_type_column_name
+            )
+            
+            # Save raw array if requested
+            if save_npy:
+                save_decoded_vector(decoded, output_dir, cell_idx, synthetic_id)
+
+            # Build single-cell AnnData object
+            synthetic_cells.append(
+                build_synthetic_cell(
+                    decoded=decoded,
+                    synthetic_id=synthetic_id,
+                    var_template=var_template,
+                    source_celltype=source_celltype,
+                    cell_type_column_name=cell_type_column_name,
+                    source_cell_idx=cell_idx,
+                )
+            )        
     updated_meta_path: Optional[str] = None
     if synthetic_metadata_entries:
         new_indices = [idx for idx, _ in synthetic_metadata_entries]
@@ -1155,13 +1284,20 @@ def main(
     else:
         print("No synthetic cells were generated (empty cell_indices).")
         adata = finalize_combined_adata(adata, cell_type_column_name)
+    
     latent_umap_path = None
+    pose_scatter_path = None
     if synthetic_metadata_entries:
         latent_umap_path = plot_latent_umap_from_metadata(
             meta_df,
             highlighted_ids=synthetic_ids,
             output_dir=os.path.join(output_dir, "latent_umap"),
             scale_factor=scale_factor, 
+        )
+        
+        pose_scatter_path = plot_pose_scatter_from_metadata(
+            meta_df=meta_df,
+            output_dir=os.path.join(output_dir, "pose_scatter"),
         )
     
     # Recompute UMAP if requested
@@ -1220,6 +1356,8 @@ def main(
         print(f"  - Latent space UMAP: {latent_umap_path}")
     else:
         print("  - Latent space UMAP: skipped (no synthetic metadata)")
+    if pose_scatter_path:
+        print(f"  - Pose 2D scatter: {pose_scatter_path}")
 
 
 if __name__ == "__main__":
@@ -1322,6 +1460,13 @@ if __name__ == "__main__":
         default=1.0,
         help="Multiplier for the latent standard deviation. Use < 1.0 to sample nearer the mean, > 1.0 for wider spread, or 0.0 for the exact mean (default: 1.0)",
     )
+    parser.add_argument(
+        "--pose_interp_method",
+        type=str,
+        choices=["lerp", "slerp"],
+        default="slerp",
+        help="Interpolation method for the pose channel: 'lerp' or 'slerp' (default: lerp)",
+    )
     
     args = parser.parse_args()
     
@@ -1341,5 +1486,5 @@ if __name__ == "__main__":
         interpolate=args.interpolate,
         n_interp=args.n_interp,
         scale_factor=args.scale_factor,
+        pose_interp_method=args.pose_interp_method,
     )
-
