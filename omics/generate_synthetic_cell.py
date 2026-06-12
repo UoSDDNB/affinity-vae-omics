@@ -487,7 +487,7 @@ def plot_latent_umap_from_metadata(
                 embedding[mask, 0],
                 embedding[mask, 1],
                 s=15,
-                alpha=0.6,
+                alpha=0.4,
                 label=label,
                 facecolor=color,
                 edgecolor="none",
@@ -899,10 +899,8 @@ def recompute_umap(
 
     for color_key in ordered_keys:
         print(f"  Saving UMAP plot colored by '{color_key}'.")
-        # Apply the explicit palette only to the detailed plot
         palette_arg = custom_palette if color_key == detailed_key else None
-        
-        sc.pl.umap(plot_adata, color=color_key, palette=palette_arg, show=False, title=f"UMAP ({color_key}, scale={scale_factor})")
+        sc.pl.umap(plot_adata, color=color_key, palette=palette_arg, alpha=0.4, show=False, title=f"UMAP ({color_key}, scale={scale_factor})")
         safe_key = color_key.replace("/", "_")
         plot_path = os.path.join(plot_dir, f"{save_prefix}_umap_{safe_key}_s{scale_factor}_{timestamp}.png")
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
@@ -912,8 +910,7 @@ def recompute_umap(
     for color_key in ordered_keys:
         print(f"  Saving PCA plot colored by '{color_key}'.")
         palette_arg = custom_palette if color_key == detailed_key else None
-        
-        sc.pl.pca(plot_adata, color=color_key, palette=palette_arg, show=False, title=f"PCA ({color_key}, scale={scale_factor})")
+        sc.pl.pca(plot_adata, color=color_key, palette=palette_arg, alpha=0.4, show=False, title=f"PCA ({color_key}, scale={scale_factor})")
         safe_key = color_key.replace("/", "_")
         pca_path = os.path.join(plot_dir, f"{save_prefix}_pca_{safe_key}_s{scale_factor}_{timestamp}.png")
         plt.savefig(pca_path, dpi=300, bbox_inches="tight")
